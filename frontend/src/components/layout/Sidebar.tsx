@@ -8,7 +8,6 @@ import {
   History,
   Settings,
   ChevronLeft,
-  ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/uiStore';
@@ -47,9 +46,8 @@ function NavSection({ title, items, collapsed }: { title?: string; items: NavIte
       )}
       <div className={cn("space-y-1", collapsed && "flex flex-col items-center")}>
         {items.map((item) => {
-          const linkContent = (
+          const navLink = (
             <NavLink
-              key={item.href}
               to={item.href}
               className={({ isActive }) =>
                 cn(
@@ -59,9 +57,7 @@ function NavSection({ title, items, collapsed }: { title?: string; items: NavIte
                     : 'gap-3 px-3 py-2 text-sm',
                   isActive
                     ? 'bg-primary text-primary-foreground shadow-sm'
-                    : collapsed
-                      ? 'text-primary hover:bg-primary/20'
-                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                 )
               }
             >
@@ -74,7 +70,9 @@ function NavSection({ title, items, collapsed }: { title?: string; items: NavIte
             return (
               <Tooltip key={item.href} delayDuration={0}>
                 <TooltipTrigger asChild>
-                  {linkContent}
+                  <span className="inline-block">
+                    {navLink}
+                  </span>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="font-medium">
                   {item.title}
@@ -83,7 +81,7 @@ function NavSection({ title, items, collapsed }: { title?: string; items: NavIte
             );
           }
 
-          return linkContent;
+          return <span key={item.href}>{navLink}</span>;
         })}
       </div>
     </div>
@@ -149,16 +147,16 @@ export function Sidebar() {
           </div>
         </ScrollArea>
 
-        {/* Footer with Settings and Collapse Toggle */}
+        {/* Footer with Settings */}
         <div className={cn(
           "absolute bottom-0 left-0 right-0 border-t bg-background",
           collapsed ? "px-2 py-2" : "px-3 py-2"
         )}>
-          <div className={cn("flex", collapsed ? "flex-col items-center gap-2" : "items-center justify-between")}>
-            {/* Settings */}
-            {collapsed ? (
-              <Tooltip delayDuration={0}>
-                <TooltipTrigger asChild>
+          {/* Settings */}
+          {collapsed ? (
+            <Tooltip delayDuration={0}>
+              <TooltipTrigger asChild>
+                <span className="inline-block">
                   <NavLink
                     to="/settings"
                     className={({ isActive }) =>
@@ -166,59 +164,32 @@ export function Sidebar() {
                         'flex items-center justify-center w-10 h-10 rounded-lg font-medium transition-all duration-150',
                         isActive
                           ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-primary hover:bg-primary/20'
+                          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                       )
                     }
                   >
                     <Settings className="h-5 w-5" />
                   </NavLink>
-                </TooltipTrigger>
-                <TooltipContent side="right">Settings</TooltipContent>
-              </Tooltip>
-            ) : (
-              <NavLink
-                to="/settings"
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150',
-                    isActive
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                  )
-                }
-              >
-                <Settings className="h-4 w-4" />
-                <span>Settings</span>
-              </NavLink>
-            )}
-
-            {/* Collapse/Expand Toggle */}
-            <Tooltip delayDuration={0}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn(
-                    "h-10 w-10 rounded-lg",
-                    collapsed
-                      ? "bg-primary/20 text-primary hover:bg-primary/30"
-                      : "text-muted-foreground"
-                  )}
-                  onClick={() => setSidebarOpen(!sidebarOpen)}
-                  aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                >
-                  {collapsed ? (
-                    <ChevronRight className="h-5 w-5" />
-                  ) : (
-                    <ChevronLeft className="h-5 w-5" />
-                  )}
-                </Button>
+                </span>
               </TooltipTrigger>
-              <TooltipContent side="right">
-                {collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              </TooltipContent>
+              <TooltipContent side="right">Settings</TooltipContent>
             </Tooltip>
-          </div>
+          ) : (
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150',
+                  isActive
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                )
+              }
+            >
+              <Settings className="h-4 w-4" />
+              <span>Settings</span>
+            </NavLink>
+          )}
         </div>
       </aside>
     </TooltipProvider>
