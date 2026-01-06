@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import Editor, { OnMount } from '@monaco-editor/react';
 import {
   Button,
@@ -25,6 +25,8 @@ import {
   CheckCircle,
   Code,
   FileCode,
+  Copy,
+  Info,
 } from 'lucide-react';
 import {
   useTool,
@@ -65,10 +67,12 @@ const DEFAULT_FUNCTION_CODE = `def my_tool(input_param: str) -> str:
 export function ToolEditorPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { theme } = useUIStore();
 
   const isEditing = id !== undefined && id !== 'new';
   const toolId = isEditing ? parseInt(id) : null;
+  const cloneId = searchParams.get('clone');
 
   // Form state
   const [name, setName] = useState('');
@@ -89,9 +93,16 @@ export function ToolEditorPage() {
 
   // Data hooks
   const { data: tool, isLoading: isLoadingTool } = useTool(toolId ?? undefined);
+  // Fetch tool to clone if cloneId is present
+  const { data: toolToClone, isLoading: isLoadingClone } = useTool(
+    cloneId ? parseInt(cloneId) : undefined
+  );
   const createTool = useCreateTool();
   const updateTool = useUpdateTool(toolId ?? 0);
   const generateSchema = useGenerateSchema();
+
+  // Check if viewing a built-in tool (read-only)
+  const isBuiltin = isEditing && tool?.tool_type === 'builtin';
 
   // Determine Monaco theme
   const getMonacoTheme = () => {
@@ -103,22 +114,31 @@ export function ToolEditorPage() {
     return theme === 'dark' ? 'deepagent-dark' : 'deepagent-light';
   };
 
-  // Initialize with tool data
+  // Initialize with tool data or cloned data
   useEffect(() => {
     if (isEditing && tool) {
+      // Editing an existing tool
       setName(tool.name);
       setDescription(tool.description);
       setCategory(tool.category);
       setCode(tool.function_code || DEFAULT_FUNCTION_CODE);
       setHasUnsavedChanges(false);
-    } else if (!isEditing) {
+    } else if (!isEditing && toolToClone) {
+      // Creating new tool from clone
+      setName(`${toolToClone.name}_copy`);
+      setDescription(toolToClone.description);
+      setCategory(toolToClone.category);
+      setCode(toolToClone.function_code || DEFAULT_FUNCTION_CODE);
+      setHasUnsavedChanges(true); // Mark as unsaved since it's a new tool
+    } else if (!isEditing && !cloneId) {
+      // Creating new tool from scratch
       setName('');
       setDescription('');
       setCategory('other');
       setCode(DEFAULT_FUNCTION_CODE);
       setHasUnsavedChanges(false);
     }
-  }, [isEditing, tool]);
+  }, [isEditing, tool, toolToClone, cloneId]);
 
   // Track unsaved changes
   useEffect(() => {
@@ -259,8 +279,16 @@ export function ToolEditorPage() {
   };
 
   const isPending = createTool.isPending || updateTool.isPending || generateSchema.isPending;
+  const isLoading = (isLoadingTool && isEditing) || (isLoadingClone && cloneId);
 
-  if (isLoadingTool && isEditing) {
+  // Handler to clone a built-in tool
+  const handleClone = () => {
+    if (tool) {
+      navigate(`/tools/new?clone=${tool.id}`);
+    }
+  };
+
+  if (isLoading) {
     return (
       <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
         <Spinner className="h-8 w-8" />
@@ -277,32 +305,60 @@ export function ToolEditorPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
               {name || 'New Tool'}
-              {hasUnsavedChanges && (
+              {isBuiltin && (
+                <Badge variant="secondary" className="text-gray-600">
+                  Built-in
+                </Badge>
+              )}
+              {!isBuiltin && hasUnsavedChanges && (
                 <Badge variant="outline" className="text-yellow-600">
                   Unsaved
                 </Badge>
               )}
             </h1>
             <p className="text-sm text-muted-foreground">
-              {isEditing ? 'Edit tool implementation' : 'Create a new tool'}
+              {isBuiltin
+                ? 'View built-in tool (read-only)'
+                : isEditing
+                  ? 'Edit tool implementation'
+                  : cloneId
+                    ? 'Create new tool from clone'
+                    : 'Create a new tool'}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={handleCancel}>
             <X className="mr-2 h-4 w-4" />
-            Cancel
+            {isBuiltin ? 'Close' : 'Cancel'}
           </Button>
-          <Button onClick={handleSave} disabled={isPending}>
-            {isPending ? (
-              <Spinner className="mr-2 h-4 w-4" />
-            ) : (
-              <Save className="mr-2 h-4 w-4" />
-            )}
-            {isEditing ? 'Save' : 'Create'}
-          </Button>
+          {isBuiltin ? (
+            <Button onClick={handleClone}>
+              <Copy className="mr-2 h-4 w-4" />
+              Clone to Edit
+            </Button>
+          ) : (
+            <Button onClick={handleSave} disabled={isPending}>
+              {isPending ? (
+                <Spinner className="mr-2 h-4 w-4" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              {isEditing ? 'Save' : 'Create'}
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* Built-in tool info banner */}
+      {isBuiltin && (
+        <Alert className="shrink-0 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30">
+          <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+          <AlertDescription className="text-blue-800 dark:text-blue-200">
+            This is a built-in tool and cannot be modified. Use "Clone to Edit" to create an editable copy.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Error alerts */}
       {error && (
@@ -333,7 +389,7 @@ export function ToolEditorPage() {
               height="100%"
               defaultLanguage="python"
               value={code}
-              onChange={(value) => setCode(value || '')}
+              onChange={(value) => !isBuiltin && setCode(value || '')}
               onMount={handleEditorMount}
               theme={getMonacoTheme()}
               options={{
@@ -351,6 +407,7 @@ export function ToolEditorPage() {
                   bracketPairs: true,
                   indentation: true,
                 },
+                readOnly: isBuiltin,
               }}
             />
           </div>
@@ -371,6 +428,7 @@ export function ToolEditorPage() {
                   placeholder="my_tool (use snake_case)"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  disabled={isBuiltin}
                 />
                 <p className="text-xs text-muted-foreground">
                   Use snake_case for OpenAI compatibility
@@ -379,7 +437,11 @@ export function ToolEditorPage() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium">Category</label>
-                <Select value={category} onValueChange={(v) => setCategory(v as ToolCategory)}>
+                <Select
+                  value={category}
+                  onValueChange={(v) => setCategory(v as ToolCategory)}
+                  disabled={isBuiltin}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
@@ -400,6 +462,7 @@ export function ToolEditorPage() {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   className="resize-none h-24"
+                  disabled={isBuiltin}
                 />
                 <p className="text-xs text-muted-foreground">
                   This helps the LLM understand when to use this tool

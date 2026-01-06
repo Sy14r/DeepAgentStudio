@@ -23,6 +23,8 @@ import {
   Folder,
   Database,
   Search as SearchIcon,
+  Eye,
+  Copy,
 } from 'lucide-react';
 import { Tool, MCPServer, ToolCategory } from '@/api/types';
 
@@ -60,9 +62,10 @@ interface UnifiedToolCardProps {
   item: UnifiedToolItem;
   onEdit: (item: UnifiedToolItem) => void;
   onDelete: (item: UnifiedToolItem) => void;
+  onClone?: (item: UnifiedToolItem) => void;
 }
 
-export function UnifiedToolCard({ item, onEdit, onDelete }: UnifiedToolCardProps) {
+export function UnifiedToolCard({ item, onEdit, onDelete, onClone }: UnifiedToolCardProps) {
   const isMCP = item.type === 'mcp';
   const data = item.data;
 
@@ -81,8 +84,10 @@ export function UnifiedToolCard({ item, onEdit, onDelete }: UnifiedToolCardProps
   const name = data.name;
   const description = data.description || (isMCP ? 'MCP Server' : 'No description');
 
-  // Determine if deletable
-  const canDelete = isMCP || (data as Tool).tool_type !== 'builtin';
+  // Check if this is a built-in tool (not editable/deletable)
+  const isBuiltin = !isMCP && (data as Tool).tool_type === 'builtin';
+  const canDelete = isMCP || !isBuiltin;
+  const canEdit = isMCP || !isBuiltin;
 
   return (
     <Card className="group hover:border-primary/50 transition-colors">
@@ -104,9 +109,25 @@ export function UnifiedToolCard({ item, onEdit, onDelete }: UnifiedToolCardProps
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => onEdit(item)}>
-                <Pencil className="mr-2 h-4 w-4" />
-                Edit
+                {canEdit ? (
+                  <>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    Edit
+                  </>
+                ) : (
+                  <>
+                    <Eye className="mr-2 h-4 w-4" />
+                    View
+                  </>
+                )}
               </DropdownMenuItem>
+              {/* Clone option for Python tools only */}
+              {!isMCP && onClone && (
+                <DropdownMenuItem onClick={() => onClone(item)}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  Clone
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive"
@@ -163,7 +184,7 @@ export function UnifiedToolCard({ item, onEdit, onDelete }: UnifiedToolCardProps
 // List item variant
 interface UnifiedToolListItemProps extends UnifiedToolCardProps {}
 
-export function UnifiedToolListItem({ item, onEdit, onDelete }: UnifiedToolListItemProps) {
+export function UnifiedToolListItem({ item, onEdit, onDelete, onClone }: UnifiedToolListItemProps) {
   const isMCP = item.type === 'mcp';
   const data = item.data;
 
@@ -182,8 +203,10 @@ export function UnifiedToolListItem({ item, onEdit, onDelete }: UnifiedToolListI
   const name = data.name;
   const description = data.description || (isMCP ? 'MCP Server' : 'No description');
 
-  // Determine if deletable
-  const canDelete = isMCP || (data as Tool).tool_type !== 'builtin';
+  // Check if this is a built-in tool (not editable/deletable)
+  const isBuiltin = !isMCP && (data as Tool).tool_type === 'builtin';
+  const canDelete = isMCP || !isBuiltin;
+  const canEdit = isMCP || !isBuiltin;
 
   return (
     <div className="group flex items-center gap-4 rounded-lg border p-4 hover:border-primary/50 transition-colors">
@@ -224,8 +247,8 @@ export function UnifiedToolListItem({ item, onEdit, onDelete }: UnifiedToolListI
         </p>
       </div>
       <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100">
-        <Button size="sm" variant="ghost" onClick={() => onEdit(item)}>
-          <Pencil className="h-4 w-4" />
+        <Button size="sm" variant="ghost" onClick={() => onEdit(item)} title={canEdit ? 'Edit' : 'View'}>
+          {canEdit ? <Pencil className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -234,6 +257,16 @@ export function UnifiedToolListItem({ item, onEdit, onDelete }: UnifiedToolListI
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {/* Clone option for Python tools only */}
+            {!isMCP && onClone && (
+              <>
+                <DropdownMenuItem onClick={() => onClone(item)}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  Clone
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem
               className="text-destructive"
               onClick={() => onDelete(item)}

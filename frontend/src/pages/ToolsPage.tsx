@@ -153,6 +153,13 @@ export function ToolsPage() {
     }
   };
 
+  const handleClone = (item: UnifiedToolItem) => {
+    if (item.type === 'tool') {
+      // Navigate to new tool page with clone parameter
+      navigate(`/tools/new?clone=${item.data.id}`);
+    }
+  };
+
   const handleDelete = (item: UnifiedToolItem) => {
     setItemToDelete(item);
     setDeleteDialogOpen(true);
@@ -344,6 +351,7 @@ export function ToolsPage() {
               item={item}
               onEdit={handleEdit}
               onDelete={handleDelete}
+              onClone={handleClone}
             />
           ))}
         </div>
@@ -358,6 +366,7 @@ export function ToolsPage() {
               item={item}
               onEdit={handleEdit}
               onDelete={handleDelete}
+              onClone={handleClone}
             />
           ))}
         </div>
