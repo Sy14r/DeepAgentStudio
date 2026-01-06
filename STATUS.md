@@ -16,6 +16,48 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ### Recent Updates (2026-01-06)
 
+**Dashboard Now Functional** ✅
+- Dashboard landing page now fetches and displays real data from API
+- Stats cards show actual counts: Agents, Tools, Prompts, Sessions
+- Recent Activity section displays last 5 sessions with:
+  - Session title and relative timestamp (using date-fns)
+  - Color-coded status badges (completed/failed/active)
+  - Clickable links to session details
+  - "View all sessions" link when more than 5 exist
+- Loading spinners while data is being fetched
+
+**Theme Persistence** ✅
+- User's light/dark mode preference now persists across page reloads
+- Added `onRehydrateStorage` callback to apply theme from localStorage on initial load
+- Theme stored via zustand persist middleware in `ui-storage` key
+
+**Sidebar Improvements** ✅
+- Removed duplicate collapse/expand chevrons from sidebar footer
+- Fixed icon color inconsistency when sidebar is collapsed vs expanded
+- Root cause: Radix UI's `TooltipTrigger asChild` was stringifying NavLink's function className
+- Fix: Wrapped NavLink in `<span>` elements to prevent Slot component issue
+
+**Multi-line Chat Input** ✅
+- Playground chat input now supports multi-line input (Textarea instead of Input)
+- Agent Editor test chat also updated with multi-line support
+- Auto-resize based on content (up to 200px in Playground, 120px in Agent Editor)
+- Shift+Enter for new line, Enter to send
+
+**Built-in Tools Protection** ✅
+- Built-in tools are now read-only in the editor (Monaco editor disabled)
+- Info banner shown: "This is a built-in tool and cannot be edited"
+- "Clone to Edit" button allows creating editable copy
+- Clone parameter support via URL: `/tools/new?clone={id}`
+- Delete button hidden for built-in tools
+
+**Backend Dependency Updates** ✅
+- Updated `httpx>=0.27.0` (was `>=0.26.0`) for mcp package compatibility
+- Updated `pydantic[email]>=2.8.0` (was `==2.5.3`) for mcp package compatibility
+- Updated `pydantic-settings>=2.1.0` for compatibility
+- Updated `requirements-dev.txt` httpx version to match
+
+**Previous Updates (2026-01-06)**
+
 **Session Detail Dialog Scroll Fix** ✅
 - Fixed overflow content in session detail popup (Messages/Trace tabs)
 - Added visual "Scroll for more" indicator with bouncing chevron icon

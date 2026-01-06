@@ -131,15 +131,23 @@ curl -X POST "http://localhost:8000/api/v1/auth/register" \
 
 ## Features
 
+### Dashboard
+- Real-time statistics cards showing counts for Agents, Tools, Prompts, Sessions
+- Recent Activity section with last 5 sessions (title, timestamp, status badge)
+- Quick Start links to Playground and other key areas
+- Loading spinners while fetching data
+
 ### Agent Management
 - Create agents with different types: ReAct, Plan-and-Execute, Conversational, Custom
 - Version control with rollback capability
 - Clone existing agents
 - Configure LLM settings (provider, model, temperature, max tokens)
 - Assign Python tools and MCP servers to agents
+- Integrated test chat panel in agent editor
 
 ### Tool Library
 - **Built-in tools**: Python Code Execution (sandboxed), HTTP Requests
+- **Built-in tool protection**: Read-only editor with "Clone to Edit" option
 - Full-page tool editor with Monaco code editor
 - Custom tool builder with Python function definitions
 - Auto-generated input schemas from function signatures
@@ -171,6 +179,7 @@ curl -X POST "http://localhost:8000/api/v1/auth/register" \
 - **Session continuation**: Resume previous sessions with full context
 - Real-time execution trace panel showing thought/action/observation steps
 - Memory status indicator
+- **Multi-line chat input**: Auto-resizing textarea (Shift+Enter for new line, Enter to send)
 
 ### Session & Observability
 - Complete conversation history
@@ -185,6 +194,12 @@ curl -X POST "http://localhost:8000/api/v1/auth/register" \
 - Encrypted API key storage (Fernet)
 - Connection testing
 - Custom model configuration
+
+### User Interface
+- **Theme persistence**: Light/dark mode preference persists across page reloads
+- System theme auto-detection option
+- Responsive layout with collapsible sidebar
+- Loading states with spinners throughout
 
 ## API Endpoints
 
@@ -317,11 +332,14 @@ Key configuration (see `backend/.env.example`):
 - Playground with chat and trace visualization
 - **Memory integration**: Buffer memory for conversation context
 - **Full-page editors**: Agent, Tool, and MCP Server editors with Monaco
-- **Built-in tools**: Python Code Execution, HTTP Requests
+- **Built-in tools**: Python Code Execution, HTTP Requests (with read-only protection)
 - **Agentic behavior**: Multi-step autonomous execution validated
 - **Real-time streaming**: WebSocket-based tool call/result streaming
 - **MCP server integration**: Full backend API, frontend UI, agent tool integration
 - **Unified Tools UI**: Single page for Python tools and MCP servers with type filtering
+- **Dashboard**: Real-time stats, recent activity, quick start links
+- **Theme persistence**: User preferences saved across sessions
+- **Multi-line chat input**: Enhanced text input with auto-resize
 
 ### Planned
 - Summary memory (LLM-based summarization for long conversations)
