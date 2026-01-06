@@ -4,14 +4,11 @@ Tool Wrapper Service for LangChain Integration.
 This module wraps DeepAgentStudio tools as LangChain-compatible tools.
 
 Supports:
-- Built-in tools: Instantiate the appropriate LangChain tool class
+- Built-in tools: Python Code Execution and HTTP Request
 - Custom tools: Create dynamic tools that execute user code via SandboxService
 """
 from typing import Any, Dict, List, Optional, Type, Callable
 from langchain.tools import BaseTool, StructuredTool, Tool as LangChainTool
-from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
-from langchain_community.utilities import WikipediaAPIWrapper
-from langchain_experimental.tools import PythonREPLTool
 from pydantic import BaseModel, Field, create_model
 from sqlalchemy.orm import Session
 import logging
@@ -35,51 +32,307 @@ class UnsupportedToolError(ToolWrapperError):
 
 # Mapping of langchain_class names to actual tool classes/factories
 BUILTIN_TOOL_REGISTRY: Dict[str, Callable[[], BaseTool]] = {
-    "DuckDuckGoSearchRun": lambda: DuckDuckGoSearchRun(),
-    "WikipediaQueryRun": lambda: WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper()),
-    "Calculator": lambda: _create_calculator_tool(),
-    "PythonREPL": lambda: PythonREPLTool(),
-    "RequestsGet": lambda: _create_requests_tool(),
+    "PythonCodeExecution": lambda: _create_python_execution_tool(),
+    "HTTPRequest": lambda: _create_http_request_tool(),
 }
 
 
-def _create_calculator_tool() -> BaseTool:
-    """Create a simple calculator tool"""
-    def calculate(expression: str) -> str:
-        """Evaluate a mathematical expression"""
+def _create_python_execution_tool() -> BaseTool:
+    """
+    Create a Python code execution tool.
+
+    This tool executes Python code in a controlled environment with access to
+    common libraries like json, datetime, math, re, collections, etc.
+    """
+    import io
+    import sys
+    from contextlib import redirect_stdout, redirect_stderr
+
+    def execute_python(code: str) -> str:
+        """Execute Python code and return the result"""
+        import ast
+
+        # Allowed modules for import
+        allowed_modules = {
+            'json': __import__('json'),
+            'math': __import__('math'),
+            're': __import__('re'),
+            'datetime': __import__('datetime'),
+            'collections': __import__('collections'),
+            'itertools': __import__('itertools'),
+            'functools': __import__('functools'),
+            'random': __import__('random'),
+            'string': __import__('string'),
+            'textwrap': __import__('textwrap'),
+            'urllib.parse': __import__('urllib.parse'),
+            'base64': __import__('base64'),
+            'hashlib': __import__('hashlib'),
+            'statistics': __import__('statistics'),
+        }
+
+        # Create execution environment
+        exec_globals = {
+            '__builtins__': {
+                # Safe builtins
+                'abs': abs,
+                'all': all,
+                'any': any,
+                'bool': bool,
+                'dict': dict,
+                'enumerate': enumerate,
+                'filter': filter,
+                'float': float,
+                'format': format,
+                'frozenset': frozenset,
+                'getattr': getattr,
+                'hasattr': hasattr,
+                'hash': hash,
+                'int': int,
+                'isinstance': isinstance,
+                'issubclass': issubclass,
+                'iter': iter,
+                'len': len,
+                'list': list,
+                'map': map,
+                'max': max,
+                'min': min,
+                'next': next,
+                'ord': ord,
+                'pow': pow,
+                'print': print,
+                'range': range,
+                'repr': repr,
+                'reversed': reversed,
+                'round': round,
+                'set': set,
+                'slice': slice,
+                'sorted': sorted,
+                'str': str,
+                'sum': sum,
+                'tuple': tuple,
+                'type': type,
+                'zip': zip,
+                'True': True,
+                'False': False,
+                'None': None,
+                '__import__': lambda name, *args, **kwargs: allowed_modules.get(name.split('.')[0]),
+            },
+            # Pre-import common modules
+            'json': allowed_modules['json'],
+            'math': allowed_modules['math'],
+            're': allowed_modules['re'],
+            'datetime': allowed_modules['datetime'],
+            'collections': allowed_modules['collections'],
+            'random': allowed_modules['random'],
+        }
+        exec_locals = {}
+
+        # Capture stdout
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
         try:
-            # Only allow safe mathematical operations
-            allowed_chars = set("0123456789+-*/.() ")
-            if not all(c in allowed_chars for c in expression):
-                return "Error: Only mathematical expressions are allowed"
-            result = eval(expression)
-            return str(result)
+            # Try to capture the result of the last expression
+            # Parse the code to see if the last statement is an expression
+            last_expr_result = None
+            try:
+                tree = ast.parse(code)
+                if tree.body and isinstance(tree.body[-1], ast.Expr):
+                    # Last statement is an expression - extract it
+                    last_expr = tree.body[-1]
+                    # Execute all but the last statement
+                    if len(tree.body) > 1:
+                        module_without_last = ast.Module(body=tree.body[:-1], type_ignores=[])
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            exec(compile(module_without_last, '<string>', 'exec'), exec_globals, exec_locals)
+                    # Evaluate the last expression
+                    expr_code = compile(ast.Expression(body=last_expr.value), '<string>', 'eval')
+                    last_expr_result = eval(expr_code, exec_globals, exec_locals)
+                else:
+                    # No trailing expression, execute normally
+                    with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                        exec(code, exec_globals, exec_locals)
+            except SyntaxError:
+                # If parsing fails, just execute normally
+                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    exec(code, exec_globals, exec_locals)
+
+            # Get printed output
+            stdout_output = stdout_capture.getvalue()
+            stderr_output = stderr_capture.getvalue()
+
+            # Priority 1: Return the last expression result if we captured one
+            if last_expr_result is not None:
+                if isinstance(last_expr_result, (dict, list, tuple)):
+                    return json.dumps(last_expr_result, indent=2, default=str)
+                return str(last_expr_result)
+
+            # Priority 2: Check for 'result' variable (common pattern)
+            if 'result' in exec_locals:
+                result_value = exec_locals['result']
+                if isinstance(result_value, (dict, list, tuple)):
+                    return json.dumps(result_value, indent=2, default=str)
+                return str(result_value)
+
+            # Priority 3: Return stdout if available
+            if stdout_output:
+                return stdout_output.strip()
+
+            # Priority 4: Return stderr if available (for debugging)
+            if stderr_output:
+                return f"stderr: {stderr_output.strip()}"
+
+            # Priority 5: Return all user-defined variables as a dict
+            user_vars = {k: v for k, v in exec_locals.items()
+                        if not k.startswith('_') and k not in allowed_modules}
+
+            if user_vars:
+                # Return ALL user variables as JSON for better visibility
+                return json.dumps(user_vars, indent=2, default=str)
+
+            return "Code executed successfully (no output)"
+
+        except SyntaxError as e:
+            return f"Syntax Error: {str(e)}"
+        except NameError as e:
+            return f"Name Error: {str(e)}"
+        except TypeError as e:
+            return f"Type Error: {str(e)}"
+        except ValueError as e:
+            return f"Value Error: {str(e)}"
         except Exception as e:
-            return f"Error: {str(e)}"
+            return f"Error: {type(e).__name__}: {str(e)}"
 
     return StructuredTool.from_function(
-        func=calculate,
-        name="Calculator",
-        description="Calculate mathematical expressions. Input should be a valid math expression like '2 + 2' or '(3 * 4) / 2'"
+        func=execute_python,
+        name="python_code_execution",
+        description="""Execute Python code and return the result.
+Use the 'result' variable to store output, or use print() statements.
+Available modules: json, math, re, datetime, collections, itertools, functools, random, string, base64, hashlib, statistics.
+Example: 'import math; result = math.sqrt(16)' returns '4.0'"""
     )
 
 
-def _create_requests_tool() -> BaseTool:
-    """Create a simple HTTP GET requests tool"""
+def _create_http_request_tool() -> BaseTool:
+    """
+    Create an HTTP request tool supporting multiple methods.
+
+    Supports GET, POST, PUT, PATCH, DELETE with JSON body and custom headers.
+    """
     import httpx
 
-    def make_request(url: str) -> str:
-        """Make an HTTP GET request to a URL"""
+    def make_http_request(request_config: str) -> str:
+        """
+        Make an HTTP request based on the configuration.
+
+        Args:
+            request_config: JSON string with url, method, headers, data, params, timeout
+
+        Returns:
+            Response body as string (JSON formatted if applicable)
+        """
         try:
-            response = httpx.get(url, timeout=30, follow_redirects=True)
-            return response.text[:5000]  # Limit response size
+            # Parse the request configuration
+            if isinstance(request_config, str):
+                # Try to parse as JSON first
+                try:
+                    config = json.loads(request_config)
+                except json.JSONDecodeError:
+                    # If not JSON, treat as a simple URL (GET request)
+                    config = {"url": request_config}
+            else:
+                config = request_config
+
+            # Extract request parameters
+            url = config.get("url")
+            if not url:
+                return "Error: URL is required"
+
+            method = config.get("method", "GET").upper()
+            headers = config.get("headers", {})
+            data = config.get("data")
+            params = config.get("params")
+            timeout = config.get("timeout", 30)
+
+            # Validate method
+            valid_methods = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+            if method not in valid_methods:
+                return f"Error: Invalid method '{method}'. Supported: {', '.join(valid_methods)}"
+
+            # Build request kwargs
+            request_kwargs = {
+                "timeout": timeout,
+                "follow_redirects": True,
+            }
+
+            if headers:
+                request_kwargs["headers"] = headers
+
+            if params:
+                request_kwargs["params"] = params
+
+            # Add JSON body for methods that support it
+            if data and method in {"POST", "PUT", "PATCH"}:
+                if isinstance(data, dict):
+                    request_kwargs["json"] = data
+                else:
+                    request_kwargs["content"] = str(data)
+
+            # Make the request
+            with httpx.Client() as client:
+                if method == "GET":
+                    response = client.get(url, **request_kwargs)
+                elif method == "POST":
+                    response = client.post(url, **request_kwargs)
+                elif method == "PUT":
+                    response = client.put(url, **request_kwargs)
+                elif method == "PATCH":
+                    response = client.patch(url, **request_kwargs)
+                elif method == "DELETE":
+                    response = client.delete(url, **request_kwargs)
+                elif method == "HEAD":
+                    response = client.head(url, **request_kwargs)
+                elif method == "OPTIONS":
+                    response = client.options(url, **request_kwargs)
+
+            # Build response
+            result = {
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+            }
+
+            # Try to parse response as JSON
+            try:
+                result["body"] = response.json()
+            except (json.JSONDecodeError, ValueError):
+                # Return text body, limited to prevent huge responses
+                body_text = response.text
+                if len(body_text) > 10000:
+                    body_text = body_text[:10000] + "\n... (truncated)"
+                result["body"] = body_text
+
+            return json.dumps(result, indent=2, default=str)
+
+        except httpx.TimeoutException:
+            return "Error: Request timed out"
+        except httpx.ConnectError as e:
+            return f"Error: Connection failed - {str(e)}"
+        except httpx.HTTPStatusError as e:
+            return f"Error: HTTP {e.response.status_code} - {str(e)}"
+        except json.JSONDecodeError as e:
+            return f"Error: Invalid JSON in request config - {str(e)}"
         except Exception as e:
-            return f"Error: {str(e)}"
+            return f"Error: {type(e).__name__}: {str(e)}"
 
     return StructuredTool.from_function(
-        func=make_request,
-        name="HTTP Request",
-        description="Make an HTTP GET request to a URL and return the response"
+        func=make_http_request,
+        name="http_request",
+        description="""Make HTTP requests to external APIs.
+Input: JSON object with url (required), method (GET/POST/PUT/PATCH/DELETE), headers, data, params, timeout.
+Examples:
+- '{"url": "https://api.example.com/data"}' for GET
+- '{"url": "https://api.example.com/items", "method": "POST", "data": {"name": "test"}}' for POST
+Returns: JSON with status_code, headers, and body."""
     )
 
 

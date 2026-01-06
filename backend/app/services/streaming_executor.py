@@ -1,0 +1,557 @@
+"""
+Streaming Agent Executor Service.
+
+Provides WebSocket-based real-time streaming of agent execution events.
+Extends the base AgentExecutorService to add streaming capability while
+maintaining backward compatibility with the REST API.
+"""
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import asyncio
+import logging
+import time
+
+from sqlalchemy.orm import Session as DBSession
+from fastapi import WebSocket
+
+# LangChain imports
+from langchain.agents import AgentExecutor as LangChainAgentExecutor
+from langchain.agents import create_react_agent, create_tool_calling_agent
+from langchain.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain.tools import BaseTool
+
+# Local imports
+from ..models.agent import Agent, AgentVersion, AgentType
+from ..models.session import Session, SessionStatus, TraceStepType
+from .agent_executor import (
+    AgentExecutorService,
+    ExecutionResult,
+    AgentNotFoundError,
+    AgentConfigurationError,
+    AgentExecutionTimeoutError,
+    REACT_PROMPT_TEMPLATE,
+    supports_tool_calling,
+)
+from .session_recorder import SessionRecorder, create_session_recorder
+from .streaming_callback import StreamingWebSocketCallbackHandler
+from .memory import ConversationMemoryService
+from .mcp_client import MCPConnectionPool
+from .mcp_tool_wrapper import create_mcp_tools_for_agent, MCPToolWrapper
+
+logger = logging.getLogger(__name__)
+
+
+class StreamingAgentExecutorService(AgentExecutorService):
+    """
+    Agent executor service with WebSocket streaming support.
+
+    Inherits from AgentExecutorService and adds the ability to stream
+    execution events (tool calls, results, errors) via WebSocket in real-time.
+
+    Usage:
+        service = StreamingAgentExecutorService(db=db, user_id=user.id)
+        result = await service.invoke_streaming(
+            agent_id=1,
+            input_message="What is 2+2?",
+            websocket=websocket,
+            session_id=None
+        )
+    """
+
+    async def invoke_streaming(
+        self,
+        agent_id: int,
+        input_message: str,
+        websocket: WebSocket,
+        session_id: Optional[int] = None,
+        config_override: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[int] = None
+    ) -> ExecutionResult:
+        """
+        Invoke agent with real-time streaming via WebSocket.
+
+        Streams events as they occur during execution:
+        - session_start: When session begins
+        - tool_call: When agent decides to use a tool
+        - tool_result: When tool completes
+        - error: When an error occurs
+        - final_answer: When agent produces final output
+        - session_end: When session completes
+
+        Args:
+            agent_id: ID of the agent to invoke
+            input_message: User's input message
+            websocket: FastAPI WebSocket connection for streaming
+            session_id: Optional existing session ID to continue
+            config_override: Optional configuration overrides
+            timeout_seconds: Optional execution timeout
+
+        Returns:
+            ExecutionResult with output and execution details
+        """
+        start_time = time.time()
+        loop = asyncio.get_event_loop()
+
+        # Load agent (using parent's methods)
+        agent = self._load_agent(agent_id)
+        version = self._get_agent_version(agent)
+        config = self._merge_config(version.config, config_override)
+        effective_timeout = timeout_seconds or config.get("timeout_seconds", 30)
+
+        # Create session recorder
+        recorder = create_session_recorder(
+            db=self.db,
+            agent_id=agent_id,
+            user_id=self.user_id,
+            agent_version_id=version.id,
+            session_id=session_id
+        )
+
+        # Initialize MCP pool for cleanup in finally
+        mcp_pool = None
+
+        try:
+            # Start session
+            session = recorder.start_session(
+                title=f"Streaming execution of {agent.name}",
+                metadata={"input_preview": input_message[:100], "streaming": True}
+            )
+
+            # Send session_start event
+            await self._send_event(websocket, "session_start", session.id, {
+                "agent_id": agent_id,
+                "agent_name": agent.name
+            })
+
+            # Record user message
+            recorder.record_user_message(input_message)
+
+            # Create streaming callback handler
+            streaming_callback = StreamingWebSocketCallbackHandler(
+                websocket=websocket,
+                session_id=session.id,
+                loop=loop
+            )
+
+            # Create LLM
+            llm = self._create_llm(config)
+            recorder.record_trace_step(
+                TraceStepType.THOUGHT,
+                content=f"Created LLM: {config.get('llm_config', {}).get('model', 'unknown')}"
+            )
+
+            # Load regular tools
+            tools = self._load_tools(agent_id, config)
+
+            # Load MCP tools (if any MCP servers are assigned)
+            mcp_pool = MCPConnectionPool()
+            mcp_tools = await self._load_mcp_tools(agent_id, mcp_pool, recorder)
+
+            # Combine all tools
+            all_tools = tools + mcp_tools
+
+            if all_tools:
+                regular_count = len(tools)
+                mcp_count = len(mcp_tools)
+                tool_names = [t.name for t in all_tools]
+                recorder.record_trace_step(
+                    TraceStepType.THOUGHT,
+                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP): {tool_names}"
+                )
+
+            # Load chat history if continuing session
+            chat_history = []
+            if session_id:
+                memory_config = config.get("memory_config", {"type": "buffer", "context_window": 10})
+                memory_service = ConversationMemoryService(self.db)
+                chat_history = memory_service.load_chat_history(session_id, memory_config)
+                if chat_history:
+                    recorder.record_trace_step(
+                        TraceStepType.THOUGHT,
+                        content=f"Loaded {len(chat_history)} messages from chat history"
+                    )
+
+            # Execute with streaming callbacks
+            result = await self._execute_agent_streaming(
+                agent_type=agent.agent_type,
+                llm=llm,
+                tools=all_tools,
+                input_message=input_message,
+                config=config,
+                recorder=recorder,
+                timeout_seconds=effective_timeout,
+                chat_history=chat_history,
+                streaming_callback=streaming_callback
+            )
+
+            # Calculate metrics
+            total_latency = int((time.time() - start_time) * 1000)
+
+            # Send final_answer event
+            await self._send_event(websocket, "final_answer", session.id, {
+                "output": result.output,
+                "token_usage": {
+                    "input_tokens": result.tokens_input,
+                    "output_tokens": result.tokens_output,
+                    "total_tokens": result.tokens_input + result.tokens_output
+                },
+                "latency_ms": total_latency
+            })
+
+            # Record and finish session
+            recorder.record_assistant_message(result.output or "")
+            recorder.finish_session(
+                status=SessionStatus.COMPLETED,
+                output=result.output,
+                tokens_input=result.tokens_input,
+                tokens_output=result.tokens_output
+            )
+
+            # Send session_end event
+            await self._send_event(websocket, "session_end", session.id, {
+                "success": True,
+                "total_steps": streaming_callback.step_number
+            })
+
+            return ExecutionResult(
+                success=True,
+                output=result.output,
+                session_id=session.id,
+                tokens_input=result.tokens_input,
+                tokens_output=result.tokens_output,
+                total_latency_ms=total_latency,
+                steps=result.steps
+            )
+
+        except AgentExecutionTimeoutError as e:
+            total_latency = int((time.time() - start_time) * 1000)
+
+            # Send error event
+            await self._send_event(websocket, "error", recorder.session_id, {
+                "error": str(e),
+                "error_type": "timeout"
+            })
+
+            recorder.fail_session(str(e), error_type="timeout")
+
+            # Send session_end
+            await self._send_event(websocket, "session_end", recorder.session_id, {
+                "success": False,
+                "total_steps": 0
+            })
+
+            return ExecutionResult(
+                success=False,
+                error=str(e),
+                error_type="timeout",
+                session_id=recorder.session_id,
+                total_latency_ms=total_latency
+            )
+
+        except Exception as e:
+            total_latency = int((time.time() - start_time) * 1000)
+            error_type = type(e).__name__
+            logger.exception(f"Streaming agent execution failed: {str(e)}")
+
+            # Send error event
+            try:
+                await self._send_event(websocket, "error", recorder.session_id or 0, {
+                    "error": str(e),
+                    "error_type": error_type
+                })
+            except Exception:
+                pass
+
+            try:
+                recorder.fail_session(str(e), error_type=error_type)
+            except Exception:
+                pass
+
+            # Send session_end
+            try:
+                await self._send_event(websocket, "session_end", recorder.session_id or 0, {
+                    "success": False,
+                    "total_steps": 0
+                })
+            except Exception:
+                pass
+
+            return ExecutionResult(
+                success=False,
+                error=str(e),
+                error_type=error_type,
+                session_id=recorder.session_id if recorder._session else None,
+                total_latency_ms=total_latency
+            )
+
+        finally:
+            # Clean up MCP connections
+            if mcp_pool:
+                try:
+                    await mcp_pool.close_all()
+                except Exception as cleanup_error:
+                    logger.warning(f"Error closing MCP connections: {cleanup_error}")
+
+    async def _send_event(
+        self,
+        websocket: WebSocket,
+        event_type: str,
+        session_id: int,
+        payload: Dict[str, Any]
+    ) -> None:
+        """
+        Send a WebSocket event.
+
+        Args:
+            websocket: WebSocket connection
+            event_type: Type of event
+            session_id: Session ID
+            payload: Event data
+        """
+        event = {
+            "type": event_type,
+            "session_id": session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "payload": payload
+        }
+        try:
+            await websocket.send_json(event)
+        except Exception as e:
+            logger.error(f"Failed to send WebSocket event: {e}")
+
+    async def _execute_agent_streaming(
+        self,
+        agent_type: AgentType,
+        llm,
+        tools: List[BaseTool],
+        input_message: str,
+        config: Dict[str, Any],
+        recorder: SessionRecorder,
+        timeout_seconds: int,
+        chat_history: List,
+        streaming_callback: StreamingWebSocketCallbackHandler
+    ) -> ExecutionResult:
+        """
+        Execute agent with streaming callbacks.
+
+        Runs the synchronous LangChain agent in a thread pool to avoid
+        blocking the async event loop, while still capturing events
+        via the streaming callback handler.
+        """
+        loop = asyncio.get_event_loop()
+
+        def run_agent():
+            """Synchronous agent execution function for thread pool."""
+            model_name = config.get("llm_config", {}).get("model", "")
+            system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+
+            # Determine agent type based on model capabilities
+            use_tool_calling = supports_tool_calling(model_name) and tools
+
+            if agent_type == AgentType.CONVERSATIONAL:
+                # Conversational agent - no tools
+                return self._run_conversational(
+                    llm, input_message, system_prompt, chat_history
+                )
+
+            elif use_tool_calling:
+                # Tool-calling agent for modern models
+                return self._run_tool_calling_agent(
+                    llm, tools, input_message, system_prompt,
+                    config, chat_history, streaming_callback
+                )
+
+            else:
+                # Text-based ReAct agent for older models
+                return self._run_text_react_agent(
+                    llm, tools, input_message, config,
+                    chat_history, streaming_callback
+                )
+
+        # Run in thread pool to avoid blocking
+        result = await loop.run_in_executor(None, run_agent)
+
+        # Record steps to database (callback already sent events)
+        for step in result.get("steps", []):
+            if step.get("step_type") == "tool_call":
+                recorder.record_tool_call(
+                    tool_name=step["tool_name"],
+                    tool_input=step.get("tool_input", {})
+                )
+                recorder.record_tool_result(
+                    tool_name=step["tool_name"],
+                    tool_output=str(step.get("tool_output", ""))
+                )
+
+        return ExecutionResult(
+            success=True,
+            output=result.get("output", ""),
+            tokens_input=result.get("tokens_input", 0),
+            tokens_output=result.get("tokens_output", 0),
+            steps=result.get("steps", [])
+        )
+
+    def _run_tool_calling_agent(
+        self,
+        llm,
+        tools: List[BaseTool],
+        input_message: str,
+        system_prompt: str,
+        config: Dict[str, Any],
+        chat_history: List,
+        streaming_callback: StreamingWebSocketCallbackHandler
+    ) -> Dict[str, Any]:
+        """
+        Run tool-calling agent (synchronous, for thread pool).
+        """
+        # Create chat prompt for tool-calling agent
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            MessagesPlaceholder(variable_name="chat_history", optional=True),
+            ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
+        ])
+
+        # Create tool-calling agent
+        agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
+
+        # Create executor with streaming callback
+        executor = LangChainAgentExecutor(
+            agent=agent,
+            tools=tools,
+            verbose=True,
+            max_iterations=config.get("max_iterations", 10),
+            return_intermediate_steps=True,
+            callbacks=[streaming_callback]
+        )
+
+        # Execute
+        result = executor.invoke({
+            "input": input_message,
+            "chat_history": chat_history
+        })
+
+        # Extract steps for database recording
+        steps = []
+        for action, observation in result.get("intermediate_steps", []):
+            tool_input = action.tool_input
+            if not isinstance(tool_input, dict):
+                tool_input = {"input": str(tool_input)}
+
+            steps.append({
+                "step_type": "tool_call",
+                "tool_name": action.tool,
+                "tool_input": tool_input,
+                "tool_output": str(observation)
+            })
+
+        output = result.get("output", "")
+
+        return {
+            "output": output,
+            "steps": steps,
+            "tokens_input": len(input_message.split()) * 2,
+            "tokens_output": len(output.split()) * 2
+        }
+
+    def _run_text_react_agent(
+        self,
+        llm,
+        tools: List[BaseTool],
+        input_message: str,
+        config: Dict[str, Any],
+        chat_history: List,
+        streaming_callback: StreamingWebSocketCallbackHandler
+    ) -> Dict[str, Any]:
+        """
+        Run text-based ReAct agent (synchronous, for thread pool).
+        """
+        system_prompt = config.get("system_prompt", "")
+        prompt_template = config.get("prompt_template", REACT_PROMPT_TEMPLATE)
+
+        if system_prompt:
+            prompt_template = f"{system_prompt}\n\n{prompt_template}"
+
+        # Prepend chat history
+        if chat_history:
+            history_text = "\n".join([
+                f"{'Human' if hasattr(msg, 'type') and msg.type == 'human' else 'Assistant'}: {msg.content}"
+                for msg in chat_history
+            ])
+            input_message = f"Previous conversation:\n{history_text}\n\nCurrent question: {input_message}"
+
+        prompt = PromptTemplate.from_template(prompt_template)
+
+        # Create ReAct agent
+        agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
+
+        # Create executor with streaming callback
+        executor = LangChainAgentExecutor(
+            agent=agent,
+            tools=tools,
+            verbose=True,
+            max_iterations=config.get("max_iterations", 10),
+            handle_parsing_errors=True,
+            return_intermediate_steps=True,
+            callbacks=[streaming_callback]
+        )
+
+        # Execute
+        result = executor.invoke({"input": input_message})
+
+        # Extract steps
+        steps = []
+        for action, observation in result.get("intermediate_steps", []):
+            tool_input = action.tool_input
+            if not isinstance(tool_input, dict):
+                tool_input = {"input": str(tool_input)}
+
+            steps.append({
+                "step_type": "tool_call",
+                "tool_name": action.tool,
+                "tool_input": tool_input,
+                "tool_output": str(observation)
+            })
+
+        output = result.get("output", "")
+
+        return {
+            "output": output,
+            "steps": steps,
+            "tokens_input": len(input_message.split()) * 2,
+            "tokens_output": len(output.split()) * 2
+        }
+
+    def _run_conversational(
+        self,
+        llm,
+        input_message: str,
+        system_prompt: str,
+        chat_history: List
+    ) -> Dict[str, Any]:
+        """
+        Run conversational agent without tools (synchronous, for thread pool).
+        """
+        messages = [SystemMessage(content=system_prompt)]
+        for msg in chat_history:
+            messages.append(msg)
+        messages.append(HumanMessage(content=input_message))
+
+        response = llm.invoke(messages)
+        output = response.content if hasattr(response, 'content') else str(response)
+
+        tokens_input = 0
+        tokens_output = 0
+        if hasattr(response, 'usage_metadata'):
+            usage = response.usage_metadata
+            tokens_input = getattr(usage, 'input_tokens', 0)
+            tokens_output = getattr(usage, 'output_tokens', 0)
+
+        return {
+            "output": output,
+            "steps": [],
+            "tokens_input": tokens_input,
+            "tokens_output": tokens_output
+        }

@@ -24,10 +24,17 @@ from langchain.tools import BaseTool
 
 # Local imports
 from ..models.agent import Agent, AgentVersion, AgentType
+from ..models.mcp_server import MCPServerConfig
 from ..models.session import Session, SessionStatus, TraceStepType
 from .llm_adapter import LLMProviderAdapter, LLMAdapterError, create_llm_from_agent_config
 from .tool_wrapper import ToolLoader, load_agent_tools
+from .mcp_client import MCPConnectionPool
+from .mcp_tool_wrapper import create_mcp_tools_for_agent, MCPToolWrapper
 from .session_recorder import SessionRecorder, create_session_recorder
+from .memory import ConversationMemoryService
+from ..encryption import decrypt_api_key
+import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +195,51 @@ class AgentExecutorService:
         timeout_seconds: Optional[int] = None
     ) -> ExecutionResult:
         """
-        Invoke an agent with a message.
+        Invoke an agent with a message (sync wrapper for async invoke).
+
+        Args:
+            agent_id: ID of the agent to invoke
+            input_message: User's input message
+            session_id: Optional existing session ID to continue
+            config_override: Optional configuration overrides
+            timeout_seconds: Optional execution timeout (default from agent config)
+
+        Returns:
+            ExecutionResult with output or error
+        """
+        # Run the async version in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # Already in async context - use run_coroutine_threadsafe
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    asyncio.run,
+                    self.invoke_async(
+                        agent_id, input_message, session_id,
+                        config_override, timeout_seconds
+                    )
+                )
+                return future.result()
+        except RuntimeError:
+            # No running loop - create one
+            return asyncio.run(
+                self.invoke_async(
+                    agent_id, input_message, session_id,
+                    config_override, timeout_seconds
+                )
+            )
+
+    async def invoke_async(
+        self,
+        agent_id: int,
+        input_message: str,
+        session_id: Optional[int] = None,
+        config_override: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[int] = None
+    ) -> ExecutionResult:
+        """
+        Invoke an agent with a message (async version with MCP support).
 
         Args:
             agent_id: ID of the agent to invoke
@@ -205,7 +256,7 @@ class AgentExecutorService:
             AgentConfigurationError: If agent misconfigured
         """
         start_time = time.time()
-        steps = []
+        mcp_pool = None
 
         # Load agent
         agent = self._load_agent(agent_id)
@@ -241,23 +292,47 @@ class AgentExecutorService:
                 content=f"Created LLM: {config.get('llm_config', {}).get('model', 'unknown')}"
             )
 
-            # Load tools
+            # Load regular tools
             tools = self._load_tools(agent_id, config)
-            if tools:
+
+            # Load MCP tools (if any MCP servers are assigned)
+            mcp_pool = MCPConnectionPool()
+            mcp_tools = await self._load_mcp_tools(agent_id, mcp_pool, recorder)
+
+            # Combine all tools
+            all_tools = tools + mcp_tools
+
+            if all_tools:
+                regular_count = len(tools)
+                mcp_count = len(mcp_tools)
+                tool_names = [t.name for t in all_tools]
                 recorder.record_trace_step(
                     TraceStepType.THOUGHT,
-                    content=f"Loaded {len(tools)} tools: {[t.name for t in tools]}"
+                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP): {tool_names}"
                 )
+
+            # Load chat history if continuing a session
+            chat_history = []
+            if session_id:
+                memory_config = config.get("memory_config", {"type": "buffer", "context_window": 10})
+                memory_service = ConversationMemoryService(self.db)
+                chat_history = memory_service.load_chat_history(session_id, memory_config)
+                if chat_history:
+                    recorder.record_trace_step(
+                        TraceStepType.THOUGHT,
+                        content=f"Loaded {len(chat_history)} messages from chat history"
+                    )
 
             # Build and execute agent
             result = self._execute_agent(
                 agent_type=agent.agent_type,
                 llm=llm,
-                tools=tools,
+                tools=all_tools,
                 input_message=input_message,
                 config=config,
                 recorder=recorder,
-                timeout_seconds=effective_timeout
+                timeout_seconds=effective_timeout,
+                chat_history=chat_history
             )
 
             # Calculate metrics
@@ -310,6 +385,14 @@ class AgentExecutorService:
                 session_id=recorder.session_id if recorder._session else None,
                 total_latency_ms=total_latency
             )
+
+        finally:
+            # Clean up MCP connections
+            if mcp_pool:
+                try:
+                    await mcp_pool.close_all()
+                except Exception as e:
+                    logger.warning(f"Error closing MCP connections: {e}")
 
     def _load_agent(self, agent_id: int) -> Agent:
         """Load agent from database with access validation"""
@@ -381,7 +464,7 @@ class AgentExecutorService:
         agent_id: int,
         config: Dict[str, Any]
     ) -> List[BaseTool]:
-        """Load tools for the agent"""
+        """Load regular tools for the agent (non-MCP)"""
         tool_loader = ToolLoader(self.db)
 
         # First try to load tools assigned to the agent
@@ -399,6 +482,61 @@ class AgentExecutorService:
 
         return tools
 
+    def _get_mcp_servers_for_agent(self, agent_id: int) -> List[MCPServerConfig]:
+        """Get MCP servers assigned to an agent"""
+        agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
+        if not agent:
+            return []
+
+        # Load MCP servers through the relationship
+        return [s for s in agent.mcp_servers if s.is_active]
+
+    def _decrypt_mcp_env_vars(
+        self,
+        servers: List[MCPServerConfig]
+    ) -> Dict[int, Dict[str, str]]:
+        """Decrypt environment variables for MCP servers"""
+        result = {}
+        for server in servers:
+            if server.encrypted_env_vars:
+                try:
+                    decrypted = decrypt_api_key(server.encrypted_env_vars)
+                    result[server.id] = json.loads(decrypted)
+                except Exception as e:
+                    logger.warning(f"Failed to decrypt env vars for MCP server {server.id}: {e}")
+        return result
+
+    async def _load_mcp_tools(
+        self,
+        agent_id: int,
+        mcp_pool: MCPConnectionPool,
+        recorder: SessionRecorder
+    ) -> List[MCPToolWrapper]:
+        """Load MCP tools for the agent asynchronously"""
+        mcp_servers = self._get_mcp_servers_for_agent(agent_id)
+
+        if not mcp_servers:
+            return []
+
+        # Decrypt environment variables
+        decrypted_env_vars = self._decrypt_mcp_env_vars(mcp_servers)
+
+        # Create MCP tools
+        mcp_tools, errors = await create_mcp_tools_for_agent(
+            configs=mcp_servers,
+            connection_pool=mcp_pool,
+            decrypted_env_vars=decrypted_env_vars
+        )
+
+        # Log any errors
+        for server_id, error_msg in errors.items():
+            recorder.record_trace_step(
+                TraceStepType.ERROR,
+                content=f"Failed to connect to MCP server {server_id}: {error_msg}"
+            )
+
+        return mcp_tools
+
     def _execute_agent(
         self,
         agent_type: AgentType,
@@ -407,20 +545,24 @@ class AgentExecutorService:
         input_message: str,
         config: Dict[str, Any],
         recorder: SessionRecorder,
-        timeout_seconds: int
+        timeout_seconds: int,
+        chat_history: List = None
     ) -> ExecutionResult:
         """Execute the appropriate agent type"""
+        if chat_history is None:
+            chat_history = []
+
         if agent_type == AgentType.REACT:
             return self._execute_react_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
             )
         elif agent_type == AgentType.PLAN_AND_EXECUTE:
             return self._execute_plan_and_execute_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
             )
         elif agent_type == AgentType.CONVERSATIONAL:
             return self._execute_conversational_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
             )
         else:
             raise AgentConfigurationError(
@@ -434,9 +576,13 @@ class AgentExecutorService:
         input_message: str,
         config: Dict[str, Any],
         recorder: SessionRecorder,
-        timeout_seconds: int
+        timeout_seconds: int,
+        chat_history: List = None
     ) -> ExecutionResult:
         """Execute ReAct agent (uses tool-calling for supported models)"""
+        if chat_history is None:
+            chat_history = []
+
         # Get model name from config
         model_name = config.get("llm_config", {}).get("model", "")
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
@@ -447,12 +593,12 @@ class AgentExecutorService:
         if use_tool_calling and tools:
             logger.info(f"Using tool-calling agent for model {model_name}")
             return self._execute_tool_calling_agent(
-                llm, tools, input_message, system_prompt, config, recorder, timeout_seconds
+                llm, tools, input_message, system_prompt, config, recorder, timeout_seconds, chat_history
             )
         else:
             logger.info(f"Using text-based ReAct agent for model {model_name}")
             return self._execute_text_react_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
             )
 
     def _execute_tool_calling_agent(
@@ -463,9 +609,13 @@ class AgentExecutorService:
         system_prompt: str,
         config: Dict[str, Any],
         recorder: SessionRecorder,
-        timeout_seconds: int
+        timeout_seconds: int,
+        chat_history: List = None
     ) -> ExecutionResult:
         """Execute agent using native tool calling (function calling) API"""
+        if chat_history is None:
+            chat_history = []
+
         # Create chat prompt for tool-calling agent
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
@@ -487,8 +637,8 @@ class AgentExecutorService:
             return_intermediate_steps=True
         )
 
-        # Execute
-        result = executor.invoke({"input": input_message})
+        # Execute with chat history
+        result = executor.invoke({"input": input_message, "chat_history": chat_history})
 
         # Extract steps
         steps = []
@@ -505,10 +655,12 @@ class AgentExecutorService:
                 tool_output=str(observation)
             )
             steps.append({
-                "type": "tool_call",
-                "tool": action.tool,
-                "input": action.tool_input,
-                "output": str(observation)
+                "step_type": "tool_call",
+                "tool_name": action.tool,
+                "tool_input": action.tool_input if isinstance(action.tool_input, dict) else {"input": action.tool_input},
+                "tool_output": str(observation),
+                "content": None,
+                "latency_ms": None,
             })
 
         output = result.get("output", "")
@@ -532,15 +684,27 @@ class AgentExecutorService:
         input_message: str,
         config: Dict[str, Any],
         recorder: SessionRecorder,
-        timeout_seconds: int
+        timeout_seconds: int,
+        chat_history: List = None
     ) -> ExecutionResult:
         """Execute text-based ReAct agent (for models without tool calling)"""
+        if chat_history is None:
+            chat_history = []
+
         # Get or create prompt
         system_prompt = config.get("system_prompt", "")
         prompt_template = config.get("prompt_template", REACT_PROMPT_TEMPLATE)
 
         if system_prompt:
             prompt_template = f"{system_prompt}\n\n{prompt_template}"
+
+        # Prepend chat history to input if available
+        if chat_history:
+            history_text = "\n".join([
+                f"{'Human' if hasattr(msg, 'type') and msg.type == 'human' else 'Assistant'}: {msg.content}"
+                for msg in chat_history
+            ])
+            input_message = f"Previous conversation:\n{history_text}\n\nCurrent question: {input_message}"
 
         prompt = PromptTemplate.from_template(prompt_template)
 
@@ -576,10 +740,12 @@ class AgentExecutorService:
                 tool_output=str(observation)
             )
             steps.append({
-                "type": "tool_call",
-                "tool": action.tool,
-                "input": action.tool_input,
-                "output": str(observation)
+                "step_type": "tool_call",
+                "tool_name": action.tool,
+                "tool_input": action.tool_input if isinstance(action.tool_input, dict) else {"input": action.tool_input},
+                "tool_output": str(observation),
+                "content": None,
+                "latency_ms": None,
             })
 
         output = result.get("output", "")
@@ -603,9 +769,13 @@ class AgentExecutorService:
         input_message: str,
         config: Dict[str, Any],
         recorder: SessionRecorder,
-        timeout_seconds: int
+        timeout_seconds: int,
+        chat_history: List = None
     ) -> ExecutionResult:
         """Execute Plan-and-Execute agent"""
+        if chat_history is None:
+            chat_history = []
+
         try:
             from langchain_experimental.plan_and_execute import (
                 PlanAndExecute,
@@ -616,6 +786,14 @@ class AgentExecutorService:
             raise AgentConfigurationError(
                 "langchain-experimental not installed. Required for Plan-and-Execute agents."
             )
+
+        # Prepend chat history to input if available
+        if chat_history:
+            history_text = "\n".join([
+                f"{'Human' if hasattr(msg, 'type') and msg.type == 'human' else 'Assistant'}: {msg.content}"
+                for msg in chat_history
+            ])
+            input_message = f"Previous conversation:\n{history_text}\n\nCurrent question: {input_message}"
 
         # Create planner and executor
         planner = load_chat_planner(llm)
@@ -661,15 +839,24 @@ class AgentExecutorService:
         input_message: str,
         config: Dict[str, Any],
         recorder: SessionRecorder,
-        timeout_seconds: int
+        timeout_seconds: int,
+        chat_history: List = None
     ) -> ExecutionResult:
         """Execute Conversational agent (simple chat without tools)"""
+        if chat_history is None:
+            chat_history = []
+
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=input_message)
-        ]
+        # Build messages list with system prompt, chat history, and current message
+        messages = [SystemMessage(content=system_prompt)]
+
+        # Add chat history
+        for msg in chat_history:
+            messages.append(msg)
+
+        # Add current user message
+        messages.append(HumanMessage(content=input_message))
 
         # Simple LLM invocation
         response = llm.invoke(messages)

@@ -1,0 +1,103 @@
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Enum as SQLEnum, JSON
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
+from enum import Enum
+from ..database import Base
+
+
+class AgentType(str, Enum):
+    """Agent type enumeration"""
+    REACT = "ReAct"
+    PLAN_AND_EXECUTE = "Plan-and-Execute"
+    CONVERSATIONAL = "Conversational"
+    CUSTOM = "Custom"
+
+
+class Agent(Base):
+    """Agent model for managing LangChain agents"""
+
+    __tablename__ = "agents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    agent_type = Column(SQLEnum(AgentType), nullable=False, default=AgentType.REACT)
+    tags = Column(JSON, default=list, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # Reference to current active version
+    current_version_id = Column(Integer, ForeignKey("agent_versions.id"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="agents")
+    versions = relationship(
+        "AgentVersion",
+        back_populates="agent",
+        foreign_keys="AgentVersion.agent_id",
+        cascade="all, delete-orphan",
+        order_by="AgentVersion.version_number.desc()"
+    )
+    current_version = relationship(
+        "AgentVersion",
+        foreign_keys=[current_version_id],
+        post_update=True
+    )
+    mcp_servers = relationship(
+        "MCPServerConfig",
+        secondary="agent_mcp_servers",
+        back_populates="agents"
+    )
+
+    def __repr__(self):
+        return f"<Agent(id={self.id}, name='{self.name}', type='{self.agent_type.value}')>"
+
+
+class AgentVersion(Base):
+    """Agent version model for version control"""
+
+    __tablename__ = "agent_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_number = Column(Integer, nullable=False)
+
+    # Configuration stored as JSONB for flexibility
+    # Structure:
+    # {
+    #   "llm_config": {
+    #     "provider": "openai",
+    #     "model": "gpt-4",
+    #     "temperature": 0.7,
+    #     "max_tokens": 2000,
+    #     "stop_sequences": []
+    #   },
+    #   "reflection_config": {
+    #     "enabled": true,
+    #     "depth": 2,
+    #     "iteration_limit": 5
+    #   },
+    #   "memory_config": {
+    #     "type": "buffer",
+    #     "context_window": 10,
+    #     "retrieval_strategy": "similarity"
+    #   },
+    #   "tool_ids": [1, 2, 3],
+    #   "prompt_id": 1,
+    #   "system_prompt": "You are a helpful assistant..."
+    # }
+    config = Column(JSON, nullable=False, default=dict)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Relationships
+    agent = relationship("Agent", back_populates="versions", foreign_keys=[agent_id])
+    creator = relationship("User")
+
+    def __repr__(self):
+        return f"<AgentVersion(id={self.id}, agent_id={self.agent_id}, version={self.version_number})>"

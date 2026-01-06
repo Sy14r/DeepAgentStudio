@@ -1,0 +1,291 @@
+"""
+Pydantic schemas for Session, Message, and TraceStep models.
+
+These schemas handle validation and serialization for:
+- Session management (create, update, list, detail)
+- Message history (conversation flow)
+- Execution traces (debugging and observability)
+"""
+from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Optional, Dict, Any, Union
+from datetime import datetime
+from enum import Enum
+
+
+# Re-export enums for schema use
+class SessionStatus(str, Enum):
+    """Session execution status"""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class MessageRole(str, Enum):
+    """Message role in conversation"""
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    TOOL = "tool"
+
+
+class TraceStepType(str, Enum):
+    """Type of trace step in agent execution"""
+    THOUGHT = "thought"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    REFLECTION = "reflection"
+    ERROR = "error"
+    OBSERVATION = "observation"
+    FINAL_ANSWER = "final_answer"
+
+
+# ============================================================================
+# Message Schemas
+# ============================================================================
+
+class MessageBase(BaseModel):
+    """Base schema for Message"""
+    role: MessageRole = Field(..., description="Message role (user/assistant/system/tool)")
+    content: str = Field(..., description="Message text content")
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls made (for assistant messages)")
+    tool_call_id: Optional[str] = Field(None, description="Tool call ID (for tool messages)")
+    meta: Dict[str, Any] = Field(default_factory=dict, description="Additional message metadata")
+
+
+class MessageCreate(MessageBase):
+    """Schema for creating a new message"""
+    pass
+
+
+class MessageResponse(MessageBase):
+    """Schema for message response"""
+    id: int
+    session_id: int
+    sequence_number: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ============================================================================
+# TraceStep Schemas
+# ============================================================================
+
+class TraceStepBase(BaseModel):
+    """Base schema for TraceStep"""
+    step_type: TraceStepType = Field(..., description="Type of trace step")
+    content: Optional[str] = Field(None, description="Step content (thought, observation, etc.)")
+    tool_name: Optional[str] = Field(None, description="Tool name (for tool_call/tool_result)")
+    tool_input: Optional[Dict[str, Any]] = Field(None, description="Tool input parameters")
+    tool_output: Optional[Union[str, Dict[str, Any]]] = Field(None, description="Tool execution result")
+    latency_ms: Optional[int] = Field(None, description="Step execution time in milliseconds")
+    meta: Dict[str, Any] = Field(default_factory=dict, description="Additional step metadata")
+
+
+class TraceStepCreate(TraceStepBase):
+    """Schema for creating a new trace step"""
+    pass
+
+
+class TraceStepResponse(TraceStepBase):
+    """Schema for trace step response"""
+    id: int
+    session_id: int
+    step_number: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ============================================================================
+# Session Schemas
+# ============================================================================
+
+class SessionBase(BaseModel):
+    """Base schema for Session"""
+    title: Optional[str] = Field(None, max_length=255, description="Optional session title")
+    meta: Dict[str, Any] = Field(default_factory=dict, description="Additional session metadata")
+
+
+class SessionCreate(SessionBase):
+    """Schema for creating a new session"""
+    agent_id: int = Field(..., description="Agent to use for this session")
+    agent_version_id: Optional[int] = Field(None, description="Specific agent version (defaults to current)")
+
+
+class SessionUpdate(BaseModel):
+    """Schema for updating session metadata"""
+    title: Optional[str] = Field(None, max_length=255)
+    status: Optional[SessionStatus] = None
+    completed_at: Optional[datetime] = None
+    total_latency_ms: Optional[int] = None
+    token_usage_input: Optional[int] = None
+    token_usage_output: Optional[int] = None
+    total_cost: Optional[float] = None
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
+
+
+class SessionResponse(SessionBase):
+    """Schema for basic session response"""
+    id: int
+    user_id: int
+    agent_id: Optional[int]
+    agent_version_id: Optional[int]
+    status: SessionStatus
+    started_at: datetime
+    completed_at: Optional[datetime]
+    total_latency_ms: Optional[int]
+    token_usage_input: Optional[int]
+    token_usage_output: Optional[int]
+    total_cost: Optional[float]
+    error_message: Optional[str]
+    error_type: Optional[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SessionDetailResponse(SessionResponse):
+    """Schema for detailed session response with messages and traces"""
+    messages: List[MessageResponse] = Field(default_factory=list, description="Conversation messages")
+    trace_steps: List[TraceStepResponse] = Field(default_factory=list, description="Execution trace")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SessionListResponse(BaseModel):
+    """Schema for paginated session list"""
+    sessions: List[SessionResponse]
+    total: int = Field(..., description="Total number of sessions")
+    page: int = Field(..., description="Current page number")
+    page_size: int = Field(..., description="Number of items per page")
+
+
+# ============================================================================
+# Session Execution Schemas
+# ============================================================================
+
+class SessionExecuteRequest(BaseModel):
+    """Schema for executing an agent in a session"""
+    input: str = Field(..., description="User input to send to the agent")
+    stream: bool = Field(default=False, description="Enable streaming responses")
+    include_trace: bool = Field(default=True, description="Include execution trace")
+
+
+class SessionExecuteResponse(BaseModel):
+    """Schema for session execution response"""
+    session_id: int
+    output: str = Field(..., description="Agent's response")
+    status: SessionStatus
+    latency_ms: Optional[int] = None
+    token_usage: Optional[Dict[str, int]] = None
+    trace: Optional[List[TraceStepResponse]] = None
+
+
+# ============================================================================
+# Statistics Schemas
+# ============================================================================
+
+class SessionStatistics(BaseModel):
+    """Schema for session statistics"""
+    total_sessions: int = Field(..., description="Total number of sessions")
+    completed_sessions: int = Field(..., description="Number of completed sessions")
+    failed_sessions: int = Field(..., description="Number of failed sessions")
+    average_latency_ms: Optional[float] = Field(None, description="Average session latency")
+    total_tokens_used: int = Field(default=0, description="Total tokens used across all sessions")
+    total_cost: float = Field(default=0.0, description="Total estimated cost")
+    success_rate: float = Field(..., description="Success rate percentage (0-100)")
+
+
+class AgentSessionSummary(BaseModel):
+    """Schema for agent-specific session summary"""
+    agent_id: int
+    agent_name: str
+    session_count: int
+    success_count: int
+    failure_count: int
+    average_latency_ms: Optional[float]
+    total_tokens: int
+    total_cost: float
+
+
+# ============================================================================
+# Agent Invoke Schemas (POST /api/agents/{id}/invoke)
+# ============================================================================
+
+class InvokeRequest(BaseModel):
+    """
+    Request schema for invoking an agent.
+
+    Example:
+        {
+            "message": "What is the weather in Tokyo?",
+            "session_id": null,
+            "config_override": {
+                "llm_config": {"temperature": 0.5}
+            },
+            "timeout_seconds": 60
+        }
+    """
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=100000,
+        description="User message to send to the agent"
+    )
+    session_id: Optional[int] = Field(
+        default=None,
+        description="Optional session ID to continue a conversation"
+    )
+    config_override: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional configuration overrides for this invocation"
+    )
+    timeout_seconds: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=3600,
+        description="Optional timeout in seconds (1-3600)"
+    )
+
+
+class TokenUsage(BaseModel):
+    """Token usage statistics"""
+    input_tokens: int = Field(default=0, description="Number of input tokens")
+    output_tokens: int = Field(default=0, description="Number of output tokens")
+    total_tokens: int = Field(default=0, description="Total tokens used")
+
+
+class InvokeResponse(BaseModel):
+    """
+    Response schema for agent invocation.
+
+    Contains the agent's response along with execution metadata.
+    """
+    success: bool = Field(..., description="Whether execution succeeded")
+    output: Optional[str] = Field(
+        default=None,
+        description="Agent's output/response"
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Error message if execution failed"
+    )
+    error_type: Optional[str] = Field(
+        default=None,
+        description="Error type classification"
+    )
+    session_id: int = Field(..., description="Session ID for this execution")
+    token_usage: TokenUsage = Field(
+        default_factory=TokenUsage,
+        description="Token usage statistics"
+    )
+    latency_ms: int = Field(default=0, description="Total execution time in ms")
+    steps: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Execution steps (tool calls, etc.)"
+    )
+
+    model_config = ConfigDict(from_attributes=True)
