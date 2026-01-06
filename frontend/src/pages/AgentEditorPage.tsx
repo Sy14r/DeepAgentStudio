@@ -4,7 +4,7 @@ import Editor, { OnMount } from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import {
   Button,
-  Input,
+  Textarea,
   Badge,
   Spinner,
   Alert,
@@ -182,7 +182,7 @@ export function AgentEditorPage() {
   const [mcpExpanded, setMcpExpanded] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Data hooks
   const { data: agent, isLoading: isLoadingAgent } = useAgent(agentId ?? undefined);
@@ -245,6 +245,15 @@ export function AgentEditorPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Auto-resize textarea as content changes
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+    }
+  }, [inputValue]);
 
   // Validate JSON on code change
   useEffect(() => {
@@ -818,20 +827,22 @@ export function AgentEditorPage() {
 
               {/* Chat input */}
               <div className="p-3 border-t shrink-0">
-                <div className="flex gap-2">
-                  <Input
+                <div className="flex gap-2 items-end">
+                  <Textarea
                     ref={inputRef}
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Type a message to test..."
+                    placeholder="Type a message... (Shift+Enter for new line)"
                     disabled={invokeAgent.isPending}
-                    className="text-sm"
+                    className="text-sm min-h-[36px] max-h-[120px] resize-none"
+                    rows={1}
                   />
                   <Button
                     size="sm"
                     onClick={handleSendMessage}
                     disabled={!inputValue.trim() || invokeAgent.isPending}
+                    className="shrink-0 h-[36px]"
                   >
                     <Send className="h-4 w-4" />
                   </Button>

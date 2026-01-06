@@ -8,7 +8,7 @@ import {
   CardHeader,
   CardTitle,
   Button,
-  Input,
+  Textarea,
   Select,
   SelectContent,
   SelectItem,
@@ -173,7 +173,7 @@ export function PlaygroundPage() {
   const [pendingStreamMessage, setPendingStreamMessage] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const traceStepIdRef = useRef(0);
 
   const { data: agentsData, isLoading: isLoadingAgents } = useAgents({
@@ -294,6 +294,15 @@ export function PlaygroundPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Auto-resize textarea as content changes
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    }
+  }, [inputValue]);
 
   useEffect(() => {
     if (paramAgentId) {
@@ -579,18 +588,20 @@ export function PlaygroundPage() {
               )}
             </ScrollArea>
             <div className="p-4 border-t shrink-0">
-              <div className="flex gap-2">
-                <Input
+              <div className="flex gap-2 items-end">
+                <Textarea
                   ref={inputRef}
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={
                     selectedAgentId
-                      ? 'Type your message...'
+                      ? 'Type your message... (Shift+Enter for new line)'
                       : 'Select an agent first'
                   }
                   disabled={!selectedAgentId || invokeAgent.isPending || isExecuting}
+                  className="min-h-[44px] max-h-[200px] resize-none"
+                  rows={1}
                 />
                 <Button
                   onClick={handleSendMessage}
@@ -600,6 +611,7 @@ export function PlaygroundPage() {
                     invokeAgent.isPending ||
                     isExecuting
                   }
+                  className="shrink-0 h-[44px]"
                 >
                   <Send className="h-4 w-4" />
                 </Button>
