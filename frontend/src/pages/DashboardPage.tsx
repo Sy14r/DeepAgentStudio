@@ -1,6 +1,8 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, Spinner } from '@/components/ui';
 import { Bot, Wrench, FileText, Play, History, TrendingUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useAgents, useTools, usePrompts, useSessions } from '@/api/hooks';
+import { formatDistanceToNow } from 'date-fns';
 
 interface StatCardProps {
   title: string;
@@ -8,9 +10,10 @@ interface StatCardProps {
   description: string;
   icon: React.ComponentType<{ className?: string }>;
   href: string;
+  isLoading?: boolean;
 }
 
-function StatCard({ title, value, description, icon: Icon, href }: StatCardProps) {
+function StatCard({ title, value, description, icon: Icon, href, isLoading }: StatCardProps) {
   return (
     <Link to={href}>
       <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
@@ -19,7 +22,9 @@ function StatCard({ title, value, description, icon: Icon, href }: StatCardProps
           <Icon className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{value}</div>
+          <div className="text-2xl font-bold">
+            {isLoading ? <Spinner className="h-6 w-6" /> : value}
+          </div>
           <p className="text-xs text-muted-foreground">{description}</p>
         </CardContent>
       </Card>
@@ -28,6 +33,14 @@ function StatCard({ title, value, description, icon: Icon, href }: StatCardProps
 }
 
 export function DashboardPage() {
+  // Fetch counts with minimal page size since we only need totals
+  const { data: agentsData, isLoading: agentsLoading } = useAgents({ pageSize: 1 });
+  const { data: toolsData, isLoading: toolsLoading } = useTools({ pageSize: 1 });
+  const { data: promptsData, isLoading: promptsLoading } = usePrompts({ pageSize: 1 });
+  const { data: sessionsData, isLoading: sessionsLoading } = useSessions({ pageSize: 5 });
+
+  const recentSessions = sessionsData?.sessions || [];
+
   return (
     <div className="space-y-6">
       <div>
@@ -40,31 +53,35 @@ export function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Agents"
-          value="-"
+          value={agentsData?.total ?? 0}
           description="Active agents"
           icon={Bot}
           href="/agents"
+          isLoading={agentsLoading}
         />
         <StatCard
           title="Tools"
-          value="-"
+          value={toolsData?.total ?? 0}
           description="Available tools"
           icon={Wrench}
           href="/tools"
+          isLoading={toolsLoading}
         />
         <StatCard
           title="Prompts"
-          value="-"
+          value={promptsData?.total ?? 0}
           description="Saved prompts"
           icon={FileText}
           href="/prompts"
+          isLoading={promptsLoading}
         />
         <StatCard
           title="Sessions"
-          value="-"
+          value={sessionsData?.total ?? 0}
           description="Total sessions"
           icon={History}
           href="/sessions"
+          isLoading={sessionsLoading}
         />
       </div>
 
@@ -103,9 +120,57 @@ export function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">
-              No recent activity. Start a session in the playground to see activity here.
-            </p>
+            {sessionsLoading ? (
+              <div className="flex justify-center py-4">
+                <Spinner className="h-6 w-6" />
+              </div>
+            ) : recentSessions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No recent activity. Start a session in the playground to see activity here.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {recentSessions.map((session) => (
+                  <Link
+                    key={session.id}
+                    to={`/sessions/${session.id}`}
+                    className="block p-2 -mx-2 rounded-md hover:bg-accent/50 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {session.title || `Session #${session.id}`}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDistanceToNow(new Date(session.started_at), { addSuffix: true })}
+                        </p>
+                      </div>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full ${
+                          session.status === 'completed'
+                            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                            : session.status === 'failed'
+                            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                            : session.status === 'active'
+                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                            : 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400'
+                        }`}
+                      >
+                        {session.status}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+                {(sessionsData?.total ?? 0) > 5 && (
+                  <Link
+                    to="/sessions"
+                    className="block text-sm text-primary hover:underline pt-2"
+                  >
+                    View all sessions →
+                  </Link>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
