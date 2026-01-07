@@ -195,12 +195,21 @@ export interface AgentUpdateRequest {
   config?: AgentConfig;
 }
 
+// Attachment type for message context
+export interface MessageAttachment {
+  name: string;
+  type: 'text' | 'image' | 'code' | 'other';
+  mimeType: string;
+  content?: string; // Text/code content or base64 for images
+}
+
 // Invoke types
 export interface InvokeRequest {
   message: string;
   session_id?: number;
   config_override?: Partial<AgentConfig>;
   timeout_seconds?: number;
+  attachments?: MessageAttachment[];
 }
 
 export interface TokenUsage {
@@ -212,6 +221,7 @@ export interface TokenUsage {
 export interface InvokeResponse {
   success: boolean;
   output: string | null;
+  content_blocks?: ContentBlock[] | null;  // Multimodal content blocks
   error: string | null;
   error_type: string | null;
   session_id: number;
@@ -281,6 +291,41 @@ export interface PromptDetail extends Prompt {
   current_version: PromptVersion | null;
 }
 
+// Multimodal Content Block types (for agent outputs)
+export type ContentBlockType = 'text' | 'image' | 'audio' | 'video' | 'file';
+export type MediaFileType = 'image' | 'audio' | 'video' | 'file';
+
+export interface ContentBlock {
+  type: ContentBlockType;
+  text?: string;           // For text blocks
+  url?: string;            // API URL to fetch the media file
+  file_name?: string;      // Display name
+  mime_type?: string;      // MIME type (e.g., 'image/png')
+  file_size?: number;      // File size in bytes
+  metadata?: {
+    width?: number;        // Image/video width
+    height?: number;       // Image/video height
+    duration?: number;     // Audio/video duration in seconds
+    prompt?: string;       // Generation prompt (for AI-generated media)
+    revised_prompt?: string; // DALL-E revised prompt
+    [key: string]: unknown;
+  };
+}
+
+export interface MediaFile {
+  id: number;
+  session_id: number;
+  message_id?: number;
+  file_name: string;
+  file_path: string;
+  media_type: MediaFileType;
+  mime_type: string;
+  file_size_bytes?: number;
+  url: string;
+  file_metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 // Session types
 export type SessionStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
@@ -308,6 +353,7 @@ export interface Message {
   session_id: number;
   role: MessageRole;
   content: string;
+  content_blocks?: ContentBlock[] | null;  // Multimodal content blocks
   sequence_number: number;
   tool_calls: Record<string, unknown>[] | null;
   tool_call_id: string | null;

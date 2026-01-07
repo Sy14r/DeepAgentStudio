@@ -19,6 +19,64 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ## Recent Updates (2026-01-07)
 
+### Multimodal Output Support (Images, Audio, Video, Files)
+
+**Content Block System** - Complete
+- Agents can now return rich multimodal outputs (images, audio, video, files)
+- New `content_blocks` field in messages for structured media responses
+- Media files stored in session workspace with URL references (not base64 in DB)
+- Frontend renders content blocks inline with appropriate viewers
+
+**DALL-E Image Generation Tool** - Complete
+- New built-in tool: "DALL-E Image Generation" using DALL-E 2 API
+- Supports sizes: 256x256, 512x512, 1024x1024
+- Generated images saved to session workspace `_media/` directory
+- Returns content block for inline image display in chat
+
+**Media Storage Service** - Complete
+- `MediaStorageService` for saving/retrieving media files
+- `SessionMediaFile` model for tracking media metadata
+- API endpoint: `GET /sessions/{id}/media/{path}` for authenticated media serving
+- Support for images, audio, video, and generic files
+
+**Frontend Content Block Renderers** - Complete
+- `ContentBlockRenderer.tsx` - dispatcher to type-specific renderers
+- `ImageBlock.tsx` - inline display with zoom modal and download
+- `AudioBlock.tsx` - HTML5 audio player with download
+- `VideoBlock.tsx` - HTML5 video player with download
+- `FileBlock.tsx` - file icon with name, size, and download button
+
+**Technical Implementation**:
+- `backend/app/services/media_storage.py` - media storage service
+- `backend/app/services/image_generation_tools.py` - DALL-E tool implementation
+- `backend/app/services/streaming_executor.py` - content_block extraction from tool results
+- `frontend/src/components/chat/content-blocks/` - React renderers
+- Migration: `add_media_attachments.py` (session_media_files table, messages.content_blocks)
+
+**Built-in Tool Sync System** - Complete
+- `builtin_tools.py` now syncs all fields on startup (including function_code)
+- Documentation added to prevent UI/implementation drift
+- DALL-E tool shows actual implementation code in UI
+
+---
+
+### Multimodal Image Support for Agents (Input)
+
+**Image Attachment Support** - Complete
+- ReAct agents with tools now correctly handle image attachments
+- Vision-capable models (GPT-4o, GPT-4o-mini, Claude 3) can analyze images
+- Frontend WebSocket now passes attachments to backend (was missing)
+- Backend tool-calling agent uses multimodal path for image content
+- Images sent as base64 data URLs in OpenAI vision format
+
+**Technical Fixes**:
+- `frontend/src/pages/PlaygroundPage.tsx`: Added `wsAttachments` parameter to WebSocket invoke
+- `backend/app/services/streaming_executor.py`: Multimodal content added directly to chat history instead of prompt interpolation (which stringifies list content)
+
+**Supported Image Formats**: PNG, JPEG, WebP, GIF
+
+---
+
 ### Built-in Power Agent System
 
 **Built-in Agent Infrastructure** - Complete
@@ -88,7 +146,7 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ## Current Application Inventory
 
-### Database Schema (20 Tables)
+### Database Schema (21 Tables)
 
 ```
 users (5 columns)
@@ -104,22 +162,24 @@ users (5 columns)
 │   └── prompt_versions (9 columns)
 ├── llm_provider_configs (10 columns)
 ├── sessions (15 columns)
-│   ├── messages (8 columns)
+│   ├── messages (8 columns + content_blocks JSONB)
 │   ├── trace_steps (10 columns)
 │   ├── session_workspaces (7 columns)
 │   ├── session_tasks (9 columns)
-│   └── session_scratchpads (5 columns)
+│   ├── session_scratchpads (5 columns)
+│   └── session_media_files (10 columns) - NEW: multimodal output storage
 └── search_provider_configs (7 columns)
 ```
 
-**Migrations**: 10 Alembic migrations applied
+**Migrations**: 11 Alembic migrations applied
 
-### Built-in Tools (11 Total)
+### Built-in Tools (12 Total)
 
 | Tool | Category | Description |
 |------|----------|-------------|
 | Python Code Execution | Code | Execute Python code in sandbox |
 | HTTP Request | API | Make HTTP requests to external APIs |
+| DALL-E Image Generation | Creative | Generate images from text prompts |
 | File Read | Workspace | Read files from agent workspace |
 | File Write | Workspace | Write/create files in workspace |
 | File Edit | Workspace | Edit files with string replacement |
@@ -134,7 +194,7 @@ users (5 columns)
 
 | Agent | Type | Tools | Description |
 |-------|------|-------|-------------|
-| Power Agent | ReAct | All 11 | Full-featured research assistant |
+| Power Agent | ReAct | All 12 | Full-featured research assistant with image generation |
 
 ### Built-in Agent Types (3 Total)
 
@@ -265,11 +325,11 @@ users (5 columns)
 | Backend Python Files | ~50 |
 | Frontend TypeScript Files | ~75 |
 | SQLAlchemy Models | 17 |
-| Database Tables | 20 |
+| Database Tables | 21 |
 | API Routers | 9 |
 | Frontend Pages | 14 |
 | UI Components | 18+ (shadcn/ui) |
-| Built-in Tools | 11 |
+| Built-in Tools | 12 |
 | Built-in Agents | 1 |
 | Built-in Agent Types | 3 |
 | Test Files | 20 (backend) + 19 (frontend) |
@@ -369,4 +429,4 @@ docker-compose up -d --build
 
 **Last Test Run**: 2026-01-07
 **Build Status**: Healthy (all containers running)
-**Database Status**: 10 migrations applied
+**Database Status**: 11 migrations applied

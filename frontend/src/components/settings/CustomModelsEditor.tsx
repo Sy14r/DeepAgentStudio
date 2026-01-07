@@ -19,7 +19,7 @@ import {
   ChevronUp,
   Cpu,
 } from 'lucide-react';
-import { CustomModelConfig, ParameterConstraints } from '@/api/types';
+import { CustomModelConfig } from '@/api/types';
 
 interface CustomModelsEditorProps {
   models: CustomModelConfig[];

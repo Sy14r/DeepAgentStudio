@@ -7,8 +7,9 @@ A comprehensive web application for building, managing, and interacting with Lan
 DeepAgentStudio provides developers and AI/ML engineers with a complete platform for agent development, including:
 
 - **Agent Catalog**: Create, version, and manage AI agents with different architectures (ReAct, Plan-and-Execute, Conversational)
-- **Built-in Power Agent**: Pre-configured agent with all 11 tools, ready to use out of the box
-- **Tool Library**: 11 built-in tools (code execution, web research, file management, task tracking) plus custom tool builder
+- **Built-in Power Agent**: Pre-configured agent with all 12 tools, ready to use out of the box
+- **Tool Library**: 12 built-in tools (code execution, web research, file management, task tracking, image generation) plus custom tool builder
+- **Multimodal Output**: Agents can generate and return images, audio, video, and files inline in chat
 - **MCP Server Integration**: Connect to Model Context Protocol servers to extend agent capabilities
 - **Prompt Management**: Template library with variable substitution, versioning, and A/B testing
 - **Interactive Playground**: Chat interface with WebSocket streaming and real-time trace visualization
@@ -113,24 +114,27 @@ Once logged in, the **Power Agent** is immediately available:
 - Navigate to **Agents** page
 - Find "Power Agent" with the "Built-in" badge
 - Click to open in Playground and start chatting
-- The agent has access to all 11 built-in tools
+- The agent has access to all 12 built-in tools including image generation
 
 ## Features
 
 ### Built-in Power Agent
 
 A pre-configured, full-featured AI assistant available to all users:
-- Access to all 11 built-in tools
+- Access to all 12 built-in tools including DALL-E image generation
+- **Vision support**: Analyze images with GPT-4o or other vision models
+- **Image generation**: Create images from text descriptions using DALL-E 2
 - Optimized for research and development tasks
 - Cannot be modified (clone to customize)
 - Uses ReAct execution strategy with gpt-4o
 
-### Built-in Tools (11 Total)
+### Built-in Tools (12 Total)
 
 | Tool | Category | Description |
 |------|----------|-------------|
 | Python Code Execution | Code | Execute Python code in sandbox |
 | HTTP Request | API | Make HTTP requests to external APIs |
+| DALL-E Image Generation | Creative | Generate images from text prompts using DALL-E 2 |
 | File Read | Workspace | Read files from agent workspace |
 | File Write | Workspace | Write/create files in workspace |
 | File Edit | Workspace | Edit files with string replacement |
@@ -148,6 +152,7 @@ A pre-configured, full-featured AI assistant available to all users:
 - Configure LLM settings (provider, model, temperature, max tokens)
 - Assign tools and MCP servers to agents
 - Integrated test chat panel with WebSocket streaming
+- **Multimodal support**: Agents with vision-capable models can process image attachments
 
 ### Tool Library
 - **Built-in tool protection**: Read-only with "Clone to Edit" option
@@ -166,10 +171,13 @@ A pre-configured, full-featured AI assistant available to all users:
 ### Playground
 - Interactive chat interface with markdown rendering
 - **WebSocket streaming**: Real-time tool calls and results
+- **Image attachments**: Upload images for vision-capable models (GPT-4o, Claude 3)
+- **Multimodal output**: View generated images, audio, video inline in chat
 - **Memory integration**: Conversation history persists across turns
 - **Session continuation**: Resume previous sessions with full context
 - Real-time execution trace panel
 - Multi-line chat input with auto-resize
+- Drag-and-drop file attachment support
 
 ### Session & Observability
 - Complete conversation history
@@ -209,7 +217,7 @@ DeepAgentStudio/
 │   │   ├── services/      # Business logic
 │   │   ├── llm/           # LLM client wrappers
 │   │   └── utils/         # Utilities (tools, workspace)
-│   ├── alembic/           # Database migrations (10 total)
+│   ├── alembic/           # Database migrations (11 total)
 │   └── tests/             # pytest test files
 ├── frontend/
 │   ├── src/
@@ -304,11 +312,14 @@ Key configuration (see `backend/.env.example`):
 - Playground with WebSocket streaming
 - Memory integration (buffer memory)
 - Full-page editors (Agent, Tool, MCP Server)
-- 11 built-in tools (code, API, workspace, web)
+- 12 built-in tools (code, API, workspace, web, image generation)
 - Built-in Power Agent
 - Agent cloning
 - MCP server integration
 - Agent type system with custom code support
+- **Multimodal image input** for vision-capable models
+- **Multimodal output** (images, audio, video, files) with content block rendering
+- **DALL-E image generation** tool with inline display
 
 ### Planned
 - Summary memory (LLM-based summarization)

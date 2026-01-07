@@ -43,6 +43,7 @@ from .mcp_tool_wrapper import create_mcp_tools_for_agent, MCPToolWrapper
 from .workspace_tools import create_workspace_tools, WORKSPACE_TOOL_NAMES
 from .web_tools import create_web_tools, WEB_TOOL_CLASSES
 from .tool_wrapper import is_workspace_tool_class, WORKSPACE_TOOL_CLASSES, is_web_tool_class
+from .image_generation_tools import create_image_generation_tools, IMAGE_GENERATION_TOOL_CLASSES
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,8 @@ class StreamingAgentExecutorService(AgentExecutorService):
         websocket: WebSocket,
         session_id: Optional[int] = None,
         config_override: Optional[Dict[str, Any]] = None,
-        timeout_seconds: Optional[int] = None
+        timeout_seconds: Optional[int] = None,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """
         Invoke agent with real-time streaming via WebSocket.
@@ -194,18 +196,37 @@ class StreamingAgentExecutorService(AgentExecutorService):
                         content=f"Created {len(web_tools)} web tools for research"
                     )
 
+            # Load image generation tools if any image tool IDs are in config
+            image_tools = []
+            if tool_ids:
+                # Check if any tool_ids are image generation tools
+                from ..models import Tool
+                image_tool_requested = self.db.query(Tool).filter(
+                    Tool.id.in_(tool_ids),
+                    Tool.langchain_class.in_(list(IMAGE_GENERATION_TOOL_CLASSES.keys()))
+                ).first()
+
+                if image_tool_requested:
+                    # Create image generation tools with session and user context
+                    image_tools = create_image_generation_tools(self.db, session.id, self.user_id)
+                    recorder.record_trace_step(
+                        TraceStepType.THOUGHT,
+                        content=f"Created {len(image_tools)} image generation tools"
+                    )
+
             # Combine all tools
-            all_tools = tools + mcp_tools + workspace_tools + web_tools
+            all_tools = tools + mcp_tools + workspace_tools + web_tools + image_tools
 
             if all_tools:
                 regular_count = len(tools)
                 mcp_count = len(mcp_tools)
                 workspace_count = len(workspace_tools)
                 web_count = len(web_tools)
+                image_count = len(image_tools)
                 tool_names = [t.name for t in all_tools]
                 recorder.record_trace_step(
                     TraceStepType.THOUGHT,
-                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP, {workspace_count} workspace, {web_count} web): {tool_names}"
+                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP, {workspace_count} workspace, {web_count} web, {image_count} image): {tool_names}"
                 )
 
             # Load chat history if continuing session
@@ -230,15 +251,17 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 recorder=recorder,
                 timeout_seconds=effective_timeout,
                 chat_history=chat_history,
-                streaming_callback=streaming_callback
+                streaming_callback=streaming_callback,
+                attachments=attachments
             )
 
             # Calculate metrics
             total_latency = int((time.time() - start_time) * 1000)
 
-            # Send final_answer event
+            # Send final_answer event with content_blocks for multimodal output
             await self._send_event(websocket, "final_answer", session.id, {
                 "output": result.output,
+                "content_blocks": result.content_blocks or [],
                 "token_usage": {
                     "input_tokens": result.tokens_input,
                     "output_tokens": result.tokens_output,
@@ -265,6 +288,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
             return ExecutionResult(
                 success=True,
                 output=result.output,
+                content_blocks=result.content_blocks,
                 session_id=session.id,
                 tokens_input=result.tokens_input,
                 tokens_output=result.tokens_output,
@@ -378,7 +402,8 @@ class StreamingAgentExecutorService(AgentExecutorService):
         recorder: SessionRecorder,
         timeout_seconds: int,
         chat_history: List,
-        streaming_callback: StreamingWebSocketCallbackHandler
+        streaming_callback: StreamingWebSocketCallbackHandler,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """
         Execute agent with streaming callbacks.
@@ -394,24 +419,49 @@ class StreamingAgentExecutorService(AgentExecutorService):
             model_name = config.get("llm_config", {}).get("model", "")
             system_prompt = config.get("system_prompt", "You are a helpful assistant.")
 
+            # Helper to check for image attachments
+            def has_image_attachments():
+                if not attachments:
+                    return False
+                for att in attachments:
+                    att_type = att.get('type') if isinstance(att, dict) else getattr(att, 'type', None)
+                    if att_type == 'image':
+                        return True
+                return False
+
             # Determine agent type based on model capabilities
             use_tool_calling = supports_tool_calling(model_name) and tools
+            has_images = has_image_attachments()
+
+            # Debug logging for image attachment handling
+            logger.info(f"Agent execution routing: strategy={execution_strategy}, model={model_name}")
+            logger.info(f"  has_images={has_images}, use_tool_calling={use_tool_calling}, supports_tc={supports_tool_calling(model_name)}")
+            logger.info(f"  tools_count={len(tools) if tools else 0}, attachments_count={len(attachments) if attachments else 0}")
 
             if execution_strategy == ExecutionStrategy.conversational:
                 # Conversational agent - no tools
                 return self._run_conversational(
-                    llm, input_message, system_prompt, chat_history
+                    llm, input_message, system_prompt, chat_history, attachments
                 )
 
             elif use_tool_calling:
                 # Tool-calling agent for modern models
                 return self._run_tool_calling_agent(
                     llm, tools, input_message, system_prompt,
-                    config, chat_history, streaming_callback
+                    config, chat_history, streaming_callback, attachments
+                )
+
+            elif has_images and supports_tool_calling(model_name):
+                # Image attachments with vision-capable model but no tools
+                # Use conversational path for proper multimodal support
+                # (tool-calling agent prompt templates don't handle multimodal content)
+                logger.info(f"Using conversational mode for image attachments (no tools)")
+                return self._run_conversational(
+                    llm, input_message, system_prompt, chat_history, attachments
                 )
 
             else:
-                # Text-based ReAct agent for older models
+                # Text-based ReAct agent for older models (no multimodal support)
                 return self._run_text_react_agent(
                     llm, tools, input_message, config,
                     chat_history, streaming_callback
@@ -435,6 +485,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
         return ExecutionResult(
             success=True,
             output=result.get("output", ""),
+            content_blocks=result.get("content_blocks", []),
             tokens_input=result.get("tokens_input", 0),
             tokens_output=result.get("tokens_output", 0),
             steps=result.get("steps", [])
@@ -448,40 +499,72 @@ class StreamingAgentExecutorService(AgentExecutorService):
         system_prompt: str,
         config: Dict[str, Any],
         chat_history: List,
-        streaming_callback: StreamingWebSocketCallbackHandler
+        streaming_callback: StreamingWebSocketCallbackHandler,
+        attachments: Optional[List[Any]] = None
     ) -> Dict[str, Any]:
         """
         Run tool-calling agent (synchronous, for thread pool).
         """
-        # Create chat prompt for tool-calling agent
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="chat_history", optional=True),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
+        # Create multimodal content if there are image attachments
+        message_content = self._create_multimodal_content(input_message, attachments)
 
-        # Create tool-calling agent
-        agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
+        # Check if we have multimodal content (list of content parts)
+        has_multimodal = isinstance(message_content, list)
 
-        # Create executor with streaming callback
-        executor = LangChainAgentExecutor(
-            agent=agent,
-            tools=tools,
-            verbose=True,
-            max_iterations=config.get("max_iterations", 10),
-            return_intermediate_steps=True,
-            callbacks=[streaming_callback]
-        )
+        if has_multimodal:
+            # For multimodal messages, add the human message directly to chat history
+            # because prompt template interpolation stringifies list content
+            full_chat_history = list(chat_history) + [HumanMessage(content=message_content)]
 
-        # Execute
-        result = executor.invoke({
-            "input": input_message,
-            "chat_history": chat_history
-        })
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                MessagesPlaceholder(variable_name="chat_history", optional=True),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ])
 
-        # Extract steps for database recording
+            agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
+
+            executor = LangChainAgentExecutor(
+                agent=agent,
+                tools=tools,
+                verbose=True,
+                max_iterations=config.get("max_iterations", 10),
+                return_intermediate_steps=True,
+                callbacks=[streaming_callback]
+            )
+
+            # Execute with chat history containing the multimodal message
+            result = executor.invoke({
+                "chat_history": full_chat_history
+            })
+        else:
+            # Original path for text-only messages
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                MessagesPlaceholder(variable_name="chat_history", optional=True),
+                ("human", "{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ])
+
+            agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
+
+            executor = LangChainAgentExecutor(
+                agent=agent,
+                tools=tools,
+                verbose=True,
+                max_iterations=config.get("max_iterations", 10),
+                return_intermediate_steps=True,
+                callbacks=[streaming_callback]
+            )
+
+            result = executor.invoke({
+                "input": message_content,
+                "chat_history": chat_history
+            })
+
+        # Extract steps and content blocks for database recording
         steps = []
+        content_blocks = []
         for action, observation in result.get("intermediate_steps", []):
             tool_input = action.tool_input
             if not isinstance(tool_input, dict):
@@ -494,10 +577,20 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 "tool_output": str(observation)
             })
 
+            # Extract content_block from tool result if present
+            try:
+                import json
+                obs_data = json.loads(observation) if isinstance(observation, str) else observation
+                if isinstance(obs_data, dict) and "content_block" in obs_data:
+                    content_blocks.append(obs_data["content_block"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # Not JSON or doesn't contain content_block
+
         output = result.get("output", "")
 
         return {
             "output": output,
+            "content_blocks": content_blocks if content_blocks else [],
             "steps": steps,
             "tokens_input": len(input_message.split()) * 2,
             "tokens_output": len(output.split()) * 2
@@ -548,8 +641,9 @@ class StreamingAgentExecutorService(AgentExecutorService):
         # Execute
         result = executor.invoke({"input": input_message})
 
-        # Extract steps
+        # Extract steps and content blocks
         steps = []
+        content_blocks = []
         for action, observation in result.get("intermediate_steps", []):
             tool_input = action.tool_input
             if not isinstance(tool_input, dict):
@@ -562,10 +656,20 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 "tool_output": str(observation)
             })
 
+            # Extract content_block from tool result if present
+            try:
+                import json
+                obs_data = json.loads(observation) if isinstance(observation, str) else observation
+                if isinstance(obs_data, dict) and "content_block" in obs_data:
+                    content_blocks.append(obs_data["content_block"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # Not JSON or doesn't contain content_block
+
         output = result.get("output", "")
 
         return {
             "output": output,
+            "content_blocks": content_blocks if content_blocks else [],
             "steps": steps,
             "tokens_input": len(input_message.split()) * 2,
             "tokens_output": len(output.split()) * 2
@@ -576,7 +680,8 @@ class StreamingAgentExecutorService(AgentExecutorService):
         llm,
         input_message: str,
         system_prompt: str,
-        chat_history: List
+        chat_history: List,
+        attachments: Optional[List[Any]] = None
     ) -> Dict[str, Any]:
         """
         Run conversational agent without tools (synchronous, for thread pool).
@@ -584,7 +689,10 @@ class StreamingAgentExecutorService(AgentExecutorService):
         messages = [SystemMessage(content=system_prompt)]
         for msg in chat_history:
             messages.append(msg)
-        messages.append(HumanMessage(content=input_message))
+
+        # Create multimodal content if there are image attachments
+        message_content = self._create_multimodal_content(input_message, attachments)
+        messages.append(HumanMessage(content=message_content))
 
         response = llm.invoke(messages)
         output = response.content if hasattr(response, 'content') else str(response)

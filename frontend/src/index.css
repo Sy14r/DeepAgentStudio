@@ -115,3 +115,44 @@
 .dark .custom-scrollbar::-webkit-scrollbar-corner {
   background: #1e293b;
 }
+
+/* Thinner scrollbar variant for textareas and compact areas */
+.thin-scrollbar {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 transparent;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+  display: block !important;
+}
+
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent !important;
+  border-radius: 3px !important;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: #94a3b8 !important;
+  border-radius: 3px !important;
+  min-height: 20px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #64748b !important;
+}
+
+/* Dark mode thin scrollbar */
+.dark .thin-scrollbar {
+  scrollbar-color: #64748b transparent;
+}
+
+.dark .thin-scrollbar::-webkit-scrollbar-thumb {
+  background: #64748b !important;
+}
+
+.dark .thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8 !important;
+}

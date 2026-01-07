@@ -743,7 +743,8 @@ def invoke_agent(
             input_message=request.message,
             session_id=request.session_id,
             config_override=request.config_override,
-            timeout_seconds=request.timeout_seconds
+            timeout_seconds=request.timeout_seconds,
+            attachments=request.attachments
         )
 
         # Build response

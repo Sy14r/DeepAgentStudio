@@ -1,9 +1,27 @@
 """
 Built-in tool catalog for LangChain tools.
 
-DeepAgentStudio provides two essential built-in tools:
-1. Python Code Execution - Run Python code in a sandboxed environment
-2. HTTP Requests - Make HTTP requests to external APIs
+DeepAgentStudio provides several built-in tools including:
+- Python Code Execution - Run Python code in a sandboxed environment
+- HTTP Requests - Make HTTP requests to external APIs
+- File Operations - Read, write, edit, list, and search files
+- Web Tools - Search and fetch web content
+- Task Management - Track tasks and notes
+- Image Generation - Generate images using DALL-E
+
+IMPORTANT: Synchronization with Implementation Files
+====================================================
+Some tools in this catalog have their actual implementation in separate files:
+- DALL-E Image Generation -> app/services/image_generation_tools.py
+- Workspace tools -> app/services/workspace_tools.py
+
+The definitions in THIS FILE are what users see in the frontend UI (Tools page).
+If the implementation changes, this file MUST be updated to match, including:
+- Function signature (parameters, types, defaults)
+- Description text
+- Examples
+
+The `seed_builtin_tools()` function syncs these definitions to the database on startup.
 """
 from typing import List, Dict, Any
 from ..models.tool import ToolCategory
@@ -1120,6 +1138,150 @@ Examples:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 ''',
     },
+    # ============= IMAGE GENERATION TOOLS =============
+    # Tools for generating images using AI models
+    # NOTE: The actual implementation is in image_generation_tools.py
+    # This definition MUST match the implementation to show correct info in the UI
+    {
+        "name": "DALL-E Image Generation",
+        "description": """Generate images using OpenAI's DALL-E 2 AI model.
+
+Capabilities:
+- Create images from text descriptions
+- Multiple size options: 256x256, 512x512, 1024x1024
+
+Usage:
+- prompt (required): Detailed description of the image to generate
+- size (optional): '1024x1024' (default), '512x512', or '256x256'
+
+Tips for better results:
+- Be specific and detailed in your prompt
+- Include artistic style references (e.g., "oil painting", "digital art", "photorealistic")
+- Mention lighting, mood, and composition details
+- Specify the subject clearly
+
+Examples:
+- generate_image(prompt="A serene Japanese garden at sunset with a red wooden bridge over a koi pond, cherry blossoms falling, photorealistic style")
+- generate_image(prompt="A futuristic city skyline at night, cyberpunk style, neon lights", size="1024x1024")
+- generate_image(prompt="Portrait of a wise owl reading a book, watercolor style", size="512x512")
+
+Note: Requires OpenAI API key configured in LLM Provider settings.
+Generated images are saved to the session workspace and returned with a viewable URL.
+""",
+        "category": ToolCategory.OTHER,
+        "tags": ["image", "generation", "dall-e", "ai", "creative", "art"],
+        "langchain_class": "DalleImageGeneration",
+        "required_config": {},
+        "function_code": '''def generate_image(prompt: str, size: str = "1024x1024") -> str:
+    """
+    Generate an image using DALL-E 2.
+
+    Args:
+        prompt: Detailed description of the image to generate
+        size: Image dimensions - '1024x1024' (default), '512x512', or '256x256'
+
+    Returns:
+        JSON with image URL, metadata, and content block for multimodal display
+    """
+    import json
+    import httpx
+    from datetime import datetime
+
+    # Validate size parameter
+    valid_sizes = ["256x256", "512x512", "1024x1024"]
+    if size not in valid_sizes:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid size. Must be one of: {valid_sizes}"
+        }, indent=2)
+
+    # API key is injected from user's OpenAI LLM Provider configuration
+    # api_key = get_openai_api_key_from_provider()
+
+    try:
+        # Call DALL-E 2 API
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": "dall-e-2",
+            "prompt": prompt,
+            "n": 1,
+            "size": size,
+            "response_format": "b64_json"
+        }
+
+        with httpx.Client(timeout=60) as client:
+            response = client.post(
+                "https://api.openai.com/v1/images/generations",
+                headers=headers,
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # Extract image data
+        image_data = data.get("data", [{}])[0]
+        b64_image = image_data.get("b64_json", "")
+        revised_prompt = image_data.get("revised_prompt", prompt)
+
+        if not b64_image:
+            return json.dumps({
+                "success": False,
+                "error": "No image data in response"
+            }, indent=2)
+
+        # Save image to session workspace
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_name = f"dalle_{timestamp}.png"
+        width, height = map(int, size.split("x"))
+
+        # media_file = save_to_session_workspace(b64_image, file_name)
+
+        # Return success with content block for multimodal display
+        return json.dumps({
+            "success": True,
+            "message": "Image generated successfully",
+            "image": {
+                "url": media_file.url,
+                "file_name": file_name,
+                "size": size,
+                "width": width,
+                "height": height,
+                "mime_type": "image/png"
+            },
+            "prompt": prompt,
+            "revised_prompt": revised_prompt,
+            "model": "dall-e-2",
+            "content_block": {
+                "type": "image",
+                "url": media_file.url,
+                "file_name": file_name,
+                "mime_type": "image/png",
+                "metadata": {
+                    "width": width,
+                    "height": height,
+                    "prompt": prompt
+                }
+            }
+        }, indent=2)
+
+    except httpx.HTTPStatusError as e:
+        error_msg = e.response.json().get("error", {}).get("message", str(e))
+        return json.dumps({
+            "success": False,
+            "error": f"DALL-E API error: {error_msg}"
+        }, indent=2)
+
+    except httpx.TimeoutException:
+        return json.dumps({
+            "success": False,
+            "error": "Image generation timed out. Try a simpler prompt."
+        }, indent=2)
+''',
+    },
 ]
 
 
@@ -1146,10 +1308,14 @@ def seed_builtin_tools(db):
         # Check if tool already exists
         existing = db.query(Tool).filter(Tool.name == tool_def["name"]).first()
         if existing:
-            # Update function_code if it's missing or different
-            if existing.function_code != tool_def.get("function_code"):
-                existing.function_code = tool_def.get("function_code")
-                existing.description = tool_def["description"]
+            # Always sync all fields to ensure UI shows correct information
+            # This is important because implementation files may change independently
+            existing.description = tool_def["description"]
+            existing.function_code = tool_def.get("function_code")
+            existing.category = tool_def["category"]
+            existing.tags = tool_def["tags"]
+            existing.langchain_class = tool_def["langchain_class"]
+            existing.required_config = tool_def["required_config"]
             continue
 
         # Create new built-in tool

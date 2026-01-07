@@ -47,6 +47,7 @@ class ExecutionResult:
     """Result of agent execution"""
     success: bool
     output: Optional[str] = None
+    content_blocks: Optional[List[Dict[str, Any]]] = None  # Multimodal content blocks
     error: Optional[str] = None
     error_type: Optional[str] = None
     session_id: Optional[int] = None
@@ -58,6 +59,8 @@ class ExecutionResult:
     def __post_init__(self):
         if self.steps is None:
             self.steps = []
+        if self.content_blocks is None:
+            self.content_blocks = []
 
 
 class AgentExecutorError(Exception):
@@ -195,7 +198,8 @@ class AgentExecutorService:
         input_message: str,
         session_id: Optional[int] = None,
         config_override: Optional[Dict[str, Any]] = None,
-        timeout_seconds: Optional[int] = None
+        timeout_seconds: Optional[int] = None,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """
         Invoke an agent with a message (sync wrapper for async invoke).
@@ -206,6 +210,7 @@ class AgentExecutorService:
             session_id: Optional existing session ID to continue
             config_override: Optional configuration overrides
             timeout_seconds: Optional execution timeout (default from agent config)
+            attachments: Optional list of attachments (images, text files, etc.)
 
         Returns:
             ExecutionResult with output or error
@@ -220,7 +225,7 @@ class AgentExecutorService:
                     asyncio.run,
                     self.invoke_async(
                         agent_id, input_message, session_id,
-                        config_override, timeout_seconds
+                        config_override, timeout_seconds, attachments
                     )
                 )
                 return future.result()
@@ -229,7 +234,7 @@ class AgentExecutorService:
             return asyncio.run(
                 self.invoke_async(
                     agent_id, input_message, session_id,
-                    config_override, timeout_seconds
+                    config_override, timeout_seconds, attachments
                 )
             )
 
@@ -239,7 +244,8 @@ class AgentExecutorService:
         input_message: str,
         session_id: Optional[int] = None,
         config_override: Optional[Dict[str, Any]] = None,
-        timeout_seconds: Optional[int] = None
+        timeout_seconds: Optional[int] = None,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """
         Invoke an agent with a message (async version with MCP support).
@@ -250,6 +256,7 @@ class AgentExecutorService:
             session_id: Optional existing session ID to continue
             config_override: Optional configuration overrides
             timeout_seconds: Optional execution timeout (default from agent config)
+            attachments: Optional list of attachments (images, text files, etc.)
 
         Returns:
             ExecutionResult with output or error
@@ -374,7 +381,8 @@ class AgentExecutorService:
                 config=config,
                 recorder=recorder,
                 timeout_seconds=effective_timeout,
-                chat_history=chat_history
+                chat_history=chat_history,
+                attachments=attachments
             )
 
             # Calculate metrics
@@ -392,6 +400,7 @@ class AgentExecutorService:
             return ExecutionResult(
                 success=True,
                 output=result.output,
+                content_blocks=result.content_blocks,
                 session_id=session.id,
                 tokens_input=result.tokens_input,
                 tokens_output=result.tokens_output,
@@ -579,6 +588,62 @@ class AgentExecutorService:
 
         return mcp_tools
 
+    def _create_multimodal_content(
+        self,
+        text_message: str,
+        attachments: Optional[List[Any]] = None
+    ) -> Union[str, List[Dict[str, Any]]]:
+        """
+        Create multimodal message content from text and attachments.
+
+        For vision-capable models (GPT-4o, etc.), images are sent as base64 data URLs.
+        Text/code attachments are already appended to the message by the frontend.
+
+        Args:
+            text_message: The text message content
+            attachments: Optional list of attachments (can be Pydantic models or dicts)
+
+        Returns:
+            Either a plain string (no images) or a list of content blocks (with images)
+        """
+        if not attachments:
+            return text_message
+
+        # Helper to get attribute from object or dict
+        def get_attr(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        # Check if there are any image attachments
+        image_attachments = [
+            att for att in attachments
+            if get_attr(att, 'type') == 'image' and get_attr(att, 'content')
+        ]
+
+        if not image_attachments:
+            # No images, just return text (text content already appended by frontend)
+            return text_message
+
+        # Build multimodal content with text and images
+        content = [{"type": "text", "text": text_message}]
+
+        for attachment in image_attachments:
+            # The content should be a base64 data URL like "data:image/png;base64,..."
+            image_url = get_attr(attachment, 'content')
+            if not image_url.startswith("data:"):
+                # Add data URL prefix if missing
+                mime_type = get_attr(attachment, 'mimeType', 'image/png')
+                image_url = f"data:{mime_type};base64,{image_url}"
+
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": image_url}
+            })
+            logger.info(f"Added image attachment: {get_attr(attachment, 'name', 'unknown')}")
+
+        return content
+
     def _execute_agent(
         self,
         execution_strategy: ExecutionStrategy,
@@ -588,7 +653,8 @@ class AgentExecutorService:
         config: Dict[str, Any],
         recorder: SessionRecorder,
         timeout_seconds: int,
-        chat_history: List = None
+        chat_history: List = None,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """Execute the appropriate agent type based on execution strategy"""
         if chat_history is None:
@@ -596,7 +662,7 @@ class AgentExecutorService:
 
         if execution_strategy == ExecutionStrategy.react:
             return self._execute_react_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, attachments
             )
         elif execution_strategy == ExecutionStrategy.plan_and_execute:
             return self._execute_plan_and_execute_agent(
@@ -604,7 +670,7 @@ class AgentExecutorService:
             )
         elif execution_strategy == ExecutionStrategy.conversational:
             return self._execute_conversational_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, attachments
             )
         else:
             raise AgentConfigurationError(
@@ -619,7 +685,8 @@ class AgentExecutorService:
         config: Dict[str, Any],
         recorder: SessionRecorder,
         timeout_seconds: int,
-        chat_history: List = None
+        chat_history: List = None,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """Execute ReAct agent (uses tool-calling for supported models)"""
         if chat_history is None:
@@ -632,10 +699,30 @@ class AgentExecutorService:
         # Check if model supports native tool calling
         use_tool_calling = supports_tool_calling(model_name)
 
+        # Helper to check for image attachments
+        def has_image_attachments():
+            if not attachments:
+                return False
+            for att in attachments:
+                att_type = att.get('type') if isinstance(att, dict) else getattr(att, 'type', None)
+                if att_type == 'image':
+                    return True
+            return False
+
+        has_images = has_image_attachments()
+
         if use_tool_calling and tools:
             logger.info(f"Using tool-calling agent for model {model_name}")
             return self._execute_tool_calling_agent(
-                llm, tools, input_message, system_prompt, config, recorder, timeout_seconds, chat_history
+                llm, tools, input_message, system_prompt, config, recorder, timeout_seconds, chat_history, attachments
+            )
+        elif has_images and use_tool_calling:
+            # Image attachments with vision-capable model but no tools
+            # Use conversational path for proper multimodal support
+            # (tool-calling agent prompt templates don't handle multimodal content)
+            logger.info(f"Using conversational mode for model {model_name} (image attachments, no tools)")
+            return self._execute_conversational_agent(
+                llm, input_message, system_prompt, config, recorder, timeout_seconds, chat_history, attachments
             )
         else:
             logger.info(f"Using text-based ReAct agent for model {model_name}")
@@ -652,11 +739,15 @@ class AgentExecutorService:
         config: Dict[str, Any],
         recorder: SessionRecorder,
         timeout_seconds: int,
-        chat_history: List = None
+        chat_history: List = None,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """Execute agent using native tool calling (function calling) API"""
         if chat_history is None:
             chat_history = []
+
+        # Create multimodal content if there are image attachments
+        message_content = self._create_multimodal_content(input_message, attachments)
 
         # Create chat prompt for tool-calling agent
         prompt = ChatPromptTemplate.from_messages([
@@ -679,11 +770,12 @@ class AgentExecutorService:
             return_intermediate_steps=True
         )
 
-        # Execute with chat history
-        result = executor.invoke({"input": input_message, "chat_history": chat_history})
+        # Execute with chat history - use multimodal content for input
+        result = executor.invoke({"input": message_content, "chat_history": chat_history})
 
-        # Extract steps
+        # Extract steps and content blocks
         steps = []
+        content_blocks = []
         intermediate_steps = result.get("intermediate_steps", [])
         for action, observation in intermediate_steps:
             # Record tool call
@@ -705,6 +797,15 @@ class AgentExecutorService:
                 "latency_ms": None,
             })
 
+            # Extract content_block from tool result if present
+            try:
+                import json
+                obs_data = json.loads(observation) if isinstance(observation, str) else observation
+                if isinstance(obs_data, dict) and "content_block" in obs_data:
+                    content_blocks.append(obs_data["content_block"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # Not JSON or doesn't contain content_block
+
         output = result.get("output", "")
 
         # Estimate token usage (rough approximation)
@@ -714,6 +815,7 @@ class AgentExecutorService:
         return ExecutionResult(
             success=True,
             output=output,
+            content_blocks=content_blocks if content_blocks else None,
             tokens_input=tokens_input,
             tokens_output=tokens_output,
             steps=steps
@@ -767,8 +869,9 @@ class AgentExecutorService:
         # Execute
         result = executor.invoke({"input": input_message})
 
-        # Extract steps
+        # Extract steps and content blocks
         steps = []
+        content_blocks = []
         intermediate_steps = result.get("intermediate_steps", [])
         for action, observation in intermediate_steps:
             # Record tool call
@@ -790,6 +893,15 @@ class AgentExecutorService:
                 "latency_ms": None,
             })
 
+            # Extract content_block from tool result if present
+            try:
+                import json
+                obs_data = json.loads(observation) if isinstance(observation, str) else observation
+                if isinstance(obs_data, dict) and "content_block" in obs_data:
+                    content_blocks.append(obs_data["content_block"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # Not JSON or doesn't contain content_block
+
         output = result.get("output", "")
 
         # Estimate token usage (rough approximation)
@@ -799,6 +911,7 @@ class AgentExecutorService:
         return ExecutionResult(
             success=True,
             output=output,
+            content_blocks=content_blocks if content_blocks else None,
             tokens_input=tokens_input,
             tokens_output=tokens_output,
             steps=steps
@@ -882,7 +995,8 @@ class AgentExecutorService:
         config: Dict[str, Any],
         recorder: SessionRecorder,
         timeout_seconds: int,
-        chat_history: List = None
+        chat_history: List = None,
+        attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """Execute Conversational agent (simple chat without tools)"""
         if chat_history is None:
@@ -897,8 +1011,11 @@ class AgentExecutorService:
         for msg in chat_history:
             messages.append(msg)
 
-        # Add current user message
-        messages.append(HumanMessage(content=input_message))
+        # Create multimodal content if there are image attachments
+        message_content = self._create_multimodal_content(input_message, attachments)
+
+        # Add current user message (with multimodal content if images present)
+        messages.append(HumanMessage(content=message_content))
 
         # Simple LLM invocation
         response = llm.invoke(messages)

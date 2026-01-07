@@ -8,12 +8,14 @@ This module provides comprehensive session management endpoints for:
 - Session statistics and analytics
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import func, and_
 from typing import List, Optional
 from datetime import datetime, timezone
 
 from ...database import get_db
+from ...services.media_storage import get_media_storage_service
 from ...models.user import User
 from ...models.agent import Agent
 from ...models.session import Session, Message, TraceStep, SessionStatus, MessageRole
@@ -562,4 +564,63 @@ def get_agent_session_summary(
         average_latency_ms=float(avg_latency) if avg_latency else None,
         total_tokens=total_tokens,
         total_cost=float(total_cost)
+    )
+
+
+# ============================================================================
+# Media File Serving Endpoint
+# ============================================================================
+
+@router.get("/{session_id}/media/{file_path:path}")
+def get_session_media(
+    session_id: int,
+    file_path: str,
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db)
+):
+    """
+    Serve a media file from a session's workspace.
+
+    This endpoint serves generated media files (images, audio, video, files)
+    from agent tool outputs like DALL-E image generation.
+
+    Args:
+        session_id: Session ID owning the media file
+        file_path: Relative path within the session workspace (e.g., "_media/image.png")
+
+    Returns:
+        Raw file content with appropriate Content-Type header
+    """
+    # Verify session ownership
+    session = db.query(Session).filter(
+        Session.id == session_id,
+        Session.user_id == current_user.id
+    ).first()
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+
+    # Get media storage service
+    media_storage = get_media_storage_service(db)
+
+    # Retrieve the file
+    content, mime_type = media_storage.get_media_file(session_id, file_path)
+
+    if content is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Media file not found"
+        )
+
+    # Return file with appropriate headers
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f"inline; filename=\"{file_path.split('/')[-1]}\"",
+            "Cache-Control": "max-age=3600"  # Cache for 1 hour
+        }
     )

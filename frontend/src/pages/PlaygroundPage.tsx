@@ -8,7 +8,6 @@ import {
   CardHeader,
   CardTitle,
   Button,
-  Textarea,
   Select,
   SelectContent,
   SelectItem,
@@ -22,11 +21,11 @@ import {
   Switch,
   Label,
 } from '@/components/ui';
+import { ChatInputWithAttachments, Attachment, ContentBlocks } from '@/components/chat';
 import {
   Play,
   MessageSquare,
   GitBranch,
-  Send,
   Bot,
   User,
   Wrench,
@@ -39,17 +38,20 @@ import {
   Wifi,
   WifiOff,
   Zap,
+  Paperclip,
 } from 'lucide-react';
 import { useAgents, useInvokeAgent, useAgentWebSocket, getErrorMessage } from '@/api/hooks';
 import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload } from '@/api/hooks';
 import { useSessions, useSessionMessages } from '@/api/hooks/useSessions';
-import { TraceStep, Session } from '@/api/types';
+import { TraceStep, Session, ContentBlock } from '@/api/types';
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
+  attachments?: Attachment[];
+  content_blocks?: ContentBlock[];
 }
 
 interface TraceStepDisplay extends TraceStep {
@@ -75,9 +77,29 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             : 'bg-muted'
         }`}
       >
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown>{message.content}</ReactMarkdown>
-        </div>
+        {/* Input Attachments */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {message.attachments.map((attachment) => (
+              <Badge
+                key={attachment.id}
+                variant={isUser ? 'secondary' : 'outline'}
+                className="text-xs flex items-center gap-1"
+              >
+                <Paperclip className="h-3 w-3" />
+                {attachment.name}
+              </Badge>
+            ))}
+          </div>
+        )}
+        {/* Content blocks (multimodal outputs) or text content */}
+        {message.content_blocks && message.content_blocks.length > 0 ? (
+          <ContentBlocks blocks={message.content_blocks} />
+        ) : (
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <ReactMarkdown>{message.content}</ReactMarkdown>
+          </div>
+        )}
         <p className="text-xs opacity-70 mt-1">
           {message.timestamp.toLocaleTimeString()}
         </p>
@@ -172,11 +194,10 @@ export function PlaygroundPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [streamingEnabled, setStreamingEnabled] = useState(true);
-  const [pendingStreamMessage, setPendingStreamMessage] = useState<string | null>(null);
+  const [_pendingStreamMessage, setPendingStreamMessage] = useState<string | null>(null);
   const [hasLoadedUrlSession, setHasLoadedUrlSession] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const traceStepIdRef = useRef(0);
 
   const { data: agentsData, isLoading: isLoadingAgents } = useAgents({
@@ -235,12 +256,13 @@ export function PlaygroundPage() {
     setSessionId(wsSessionId);
     setPendingStreamMessage(null);
 
-    // Add assistant message
+    // Add assistant message with content blocks if available
     const assistantMessage: ChatMessage = {
       id: `assistant-${Date.now()}`,
       role: 'assistant',
       content: payload.output,
       timestamp: new Date(),
+      content_blocks: payload.content_blocks,
     };
     setMessages((prev) => [...prev, assistantMessage]);
 
@@ -298,15 +320,6 @@ export function PlaygroundPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Auto-resize textarea as content changes
-  useEffect(() => {
-    const textarea = inputRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-    }
-  }, [inputValue]);
-
   useEffect(() => {
     if (paramAgentId) {
       setSelectedAgentId(parseInt(paramAgentId));
@@ -333,20 +346,34 @@ export function PlaygroundPage() {
           role: msg.role as 'user' | 'assistant',
           content: msg.content,
           timestamp: new Date(msg.created_at),
+          content_blocks: msg.content_blocks || undefined,
         }));
       setMessages(loadedMessages);
       setIsLoadingHistory(false);
     }
   }, [sessionMessages, isLoadingHistory]);
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || !selectedAgentId) return;
+  const handleSendMessage = async (message: string, attachments: Attachment[]) => {
+    if ((!message.trim() && attachments.length === 0) || !selectedAgentId) return;
+
+    // Build message content including attachment context
+    let fullContent = message.trim();
+    if (attachments.length > 0) {
+      const attachmentContext = attachments
+        .filter(a => a.content && (a.type === 'text' || a.type === 'code'))
+        .map(a => `\n\n--- Attached file: ${a.name} ---\n${a.content}`)
+        .join('');
+      if (attachmentContext) {
+        fullContent = `${fullContent}${attachmentContext}`;
+      }
+    }
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: inputValue.trim(),
+      content: message.trim(),
       timestamp: new Date(),
+      attachments: attachments.length > 0 ? attachments : undefined,
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -356,15 +383,28 @@ export function PlaygroundPage() {
     // Use WebSocket streaming if enabled and connected
     if (streamingEnabled && isConnected) {
       setPendingStreamMessage(userMessage.content);
-      wsInvoke(userMessage.content, sessionId || undefined);
+      // Pass attachments to WebSocket for image support
+      const wsAttachments = attachments.length > 0 ? attachments.map(a => ({
+        name: a.name,
+        type: a.type,
+        mimeType: a.mimeType,
+        content: a.content,
+      })) : undefined;
+      wsInvoke(fullContent, sessionId || undefined, wsAttachments);
       return;
     }
 
     // Fallback to REST API
     try {
       const response = await invokeAgent.mutateAsync({
-        message: userMessage.content,
+        message: fullContent,
         session_id: sessionId || undefined,
+        attachments: attachments.map(a => ({
+          name: a.name,
+          type: a.type,
+          mimeType: a.mimeType,
+          content: a.content,
+        })),
       });
 
       if (response.session_id) {
@@ -377,6 +417,7 @@ export function PlaygroundPage() {
           role: 'assistant',
           content: response.output,
           timestamp: new Date(),
+          content_blocks: response.content_blocks || undefined,
         };
         setMessages((prev) => [...prev, assistantMessage]);
       } else if (response.error) {
@@ -397,19 +438,11 @@ export function PlaygroundPage() {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
-
   const handleNewSession = () => {
     setMessages([]);
     setTraceSteps([]);
     setSessionId(null);
     setError(null);
-    inputRef.current?.focus();
   };
 
   const handleContinueSession = (session: Session) => {
@@ -601,34 +634,20 @@ export function PlaygroundPage() {
               )}
             </ScrollArea>
             <div className="p-4 border-t shrink-0">
-              <div className="flex gap-2 items-end">
-                <Textarea
-                  ref={inputRef}
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    selectedAgentId
-                      ? 'Type your message... (Shift+Enter for new line)'
-                      : 'Select an agent first'
-                  }
-                  disabled={!selectedAgentId || invokeAgent.isPending || isExecuting}
-                  className="min-h-[44px] max-h-[200px] resize-none"
-                  rows={1}
-                />
-                <Button
-                  onClick={handleSendMessage}
-                  disabled={
-                    !inputValue.trim() ||
-                    !selectedAgentId ||
-                    invokeAgent.isPending ||
-                    isExecuting
-                  }
-                  className="shrink-0 h-[44px]"
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
-              </div>
+              <ChatInputWithAttachments
+                value={inputValue}
+                onChange={setInputValue}
+                onSend={handleSendMessage}
+                placeholder={
+                  selectedAgentId
+                    ? 'Type your message... (Shift+Enter for new line)'
+                    : 'Select an agent first'
+                }
+                disabled={!selectedAgentId}
+                isLoading={invokeAgent.isPending || isExecuting}
+                maxHeight={200}
+                minHeight={44}
+              />
             </div>
           </CardContent>
         </Card>

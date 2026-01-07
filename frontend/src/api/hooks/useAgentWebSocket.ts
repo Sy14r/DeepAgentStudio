@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '@/stores/authStore';
+import type { ContentBlock } from '../types';
 
 // WebSocket Event Types
 export interface WSEvent {
@@ -49,6 +50,7 @@ export interface ErrorPayload {
 
 export interface FinalAnswerPayload {
   output: string;
+  content_blocks?: ContentBlock[];  // Multimodal content blocks (images, audio, video, files)
   token_usage: {
     input_tokens: number;
     output_tokens: number;
@@ -76,13 +78,21 @@ export interface UseAgentWebSocketOptions {
   reconnectDelay?: number;
 }
 
+// Attachment type for WebSocket
+export interface WSAttachment {
+  name: string;
+  type: 'text' | 'image' | 'code' | 'other';
+  mimeType: string;
+  content?: string;
+}
+
 // Hook Return Type
 export interface UseAgentWebSocketReturn {
   isConnected: boolean;
   isExecuting: boolean;
   connect: () => void;
   disconnect: () => void;
-  invoke: (message: string, sessionId?: number) => void;
+  invoke: (message: string, sessionId?: number, attachments?: WSAttachment[]) => void;
   error: string | null;
 }
 
@@ -121,7 +131,7 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
   const [error, setError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalDisconnectRef = useRef(false);
 
   const token = useAuthStore((state) => state.token);
@@ -248,7 +258,7 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
   }, []);
 
   // Send invoke message
-  const invoke = useCallback((message: string, sessionId?: number) => {
+  const invoke = useCallback((message: string, sessionId?: number, attachments?: WSAttachment[]) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setError('WebSocket not connected');
       return;
@@ -256,13 +266,17 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
 
     setError(null);
 
-    const payload: { type: string; message: string; session_id?: number } = {
+    const payload: { type: string; message: string; session_id?: number; attachments?: WSAttachment[] } = {
       type: 'invoke',
       message,
     };
 
     if (sessionId) {
       payload.session_id = sessionId;
+    }
+
+    if (attachments && attachments.length > 0) {
+      payload.attachments = attachments;
     }
 
     wsRef.current.send(JSON.stringify(payload));

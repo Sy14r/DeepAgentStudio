@@ -114,6 +114,7 @@ async def websocket_agent_stream(
                     session_id = message.get("session_id")
                     config_override = message.get("config")
                     timeout = message.get("timeout")
+                    attachments = message.get("attachments")  # Support for file attachments
 
                     if not input_message:
                         await websocket.send_json({
@@ -134,7 +135,8 @@ async def websocket_agent_stream(
                             websocket=websocket,
                             session_id=session_id,
                             config_override=config_override,
-                            timeout_seconds=timeout
+                            timeout_seconds=timeout,
+                            attachments=attachments
                         )
 
                         logger.info(

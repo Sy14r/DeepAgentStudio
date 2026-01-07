@@ -35,11 +35,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui';
+import { ChatInputWithAttachments, Attachment } from '@/components/chat';
 import {
   Save,
   X,
   Play,
-  Send,
   Bot,
   User,
   AlertCircle,
@@ -52,9 +52,9 @@ import {
   Eye,
   Wifi,
   WifiOff,
-  Square,
   Copy,
   Lock,
+  Paperclip,
 } from 'lucide-react';
 import {
   useAgent,
@@ -72,7 +72,8 @@ import {
   getErrorMessage,
 } from '@/api/hooks';
 import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload } from '@/api/hooks/useAgentWebSocket';
-import { AgentCreateRequest, TraceStep } from '@/api/types';
+import { AgentCreateRequest, TraceStep, ContentBlock } from '@/api/types';
+import { ContentBlockRenderer } from '@/components/chat/content-blocks';
 import { SessionDetailDialog } from '@/components/sessions';
 
 // Form schema
@@ -102,6 +103,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  attachments?: Attachment[];
+  content_blocks?: ContentBlock[];
 }
 
 // Field descriptions for tooltips
@@ -158,9 +161,32 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'
         }`}
       >
+        {/* Attachments */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-1.5">
+            {message.attachments.map((attachment) => (
+              <Badge
+                key={attachment.id}
+                variant={isUser ? 'secondary' : 'outline'}
+                className="text-xs flex items-center gap-1 py-0"
+              >
+                <Paperclip className="h-2.5 w-2.5" />
+                {attachment.name}
+              </Badge>
+            ))}
+          </div>
+        )}
         <div className="prose prose-sm dark:prose-invert max-w-none">
           <ReactMarkdown>{message.content}</ReactMarkdown>
         </div>
+        {/* Content blocks (images, audio, video, files) */}
+        {message.content_blocks && message.content_blocks.length > 0 && (
+          <div className="mt-2 space-y-2">
+            {message.content_blocks.map((block, index) => (
+              <ContentBlockRenderer key={index} block={block} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -195,7 +221,6 @@ export function AgentEditorPage() {
   const [pendingAssistantMessage, setPendingAssistantMessage] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Data hooks
@@ -226,6 +251,8 @@ export function AgentEditorPage() {
       step_type: 'tool_call',
       tool_name: payload.tool_name,
       tool_input: payload.tool_input,
+      tool_output: null,
+      latency_ms: null,
       content: `Calling ${payload.tool_name}`,
       created_at: new Date().toISOString(),
     };
@@ -240,7 +267,8 @@ export function AgentEditorPage() {
       step_number: payload.step_number,
       step_type: 'tool_result',
       tool_name: payload.tool_name,
-      tool_output: payload.tool_output,
+      tool_input: null,
+      tool_output: typeof payload.tool_output === 'object' ? payload.tool_output as Record<string, unknown> : { result: payload.tool_output },
       latency_ms: payload.latency_ms,
       content: `Result from ${payload.tool_name}`,
       created_at: new Date().toISOString(),
@@ -248,12 +276,13 @@ export function AgentEditorPage() {
     setTraceSteps((prev) => [...prev, step]);
   };
 
-  const handleFinalAnswer = (payload: FinalAnswerPayload, wsSessionId: number) => {
+  const handleFinalAnswer = (payload: FinalAnswerPayload, _wsSessionId: number) => {
     const assistantMessage: ChatMessage = {
       id: `assistant-${Date.now()}`,
       role: 'assistant',
       content: payload.output,
       timestamp: new Date(),
+      content_blocks: payload.content_blocks,
     };
     setMessages((prev) => [...prev, assistantMessage]);
     setPendingAssistantMessage('');
@@ -387,15 +416,6 @@ export function AgentEditorPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Auto-resize textarea
-  useEffect(() => {
-    const textarea = inputRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
-    }
-  }, [inputValue]);
-
   const handleAddTag = () => {
     const tag = tagInput.trim();
     if (tag && !form.getValues('tags').includes(tag)) {
@@ -479,14 +499,27 @@ export function AgentEditorPage() {
   };
 
   // Chat handlers
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || !agentId) return;
+  const handleSendMessage = async (message: string, attachments: Attachment[]) => {
+    if ((!message.trim() && attachments.length === 0) || !agentId) return;
+
+    // Build message content including attachment context
+    let fullContent = message.trim();
+    if (attachments.length > 0) {
+      const attachmentContext = attachments
+        .filter(a => a.content && (a.type === 'text' || a.type === 'code'))
+        .map(a => `\n\n--- Attached file: ${a.name} ---\n${a.content}`)
+        .join('');
+      if (attachmentContext) {
+        fullContent = `${fullContent}${attachmentContext}`;
+      }
+    }
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: inputValue.trim(),
+      content: message.trim(),
       timestamp: new Date(),
+      attachments: attachments.length > 0 ? attachments : undefined,
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -495,7 +528,14 @@ export function AgentEditorPage() {
 
     // Use WebSocket streaming if enabled and connected
     if (streamingEnabled && isConnected) {
-      wsInvoke(userMessage.content, sessionId || undefined);
+      // Convert attachments to WebSocket format
+      const wsAttachments = attachments.map(a => ({
+        name: a.name,
+        type: a.type,
+        mimeType: a.mimeType,
+        content: a.content,
+      }));
+      wsInvoke(fullContent, sessionId || undefined, wsAttachments.length > 0 ? wsAttachments : undefined);
       return;
     }
 
@@ -503,8 +543,14 @@ export function AgentEditorPage() {
     try {
       abortControllerRef.current = new AbortController();
       const response = await invokeAgent.mutateAsync({
-        message: userMessage.content,
+        message: fullContent,
         session_id: sessionId || undefined,
+        attachments: attachments.map(a => ({
+          name: a.name,
+          type: a.type,
+          mimeType: a.mimeType,
+          content: a.content,
+        })),
       });
 
       if (response.session_id) {
@@ -564,20 +610,12 @@ export function AgentEditorPage() {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
-
   const handleNewSession = () => {
     setMessages([]);
     setTraceSteps([]);
     setSessionId(null);
     setChatError(null);
     setPendingAssistantMessage('');
-    inputRef.current?.focus();
   };
 
   // Handle MCP server toggle
@@ -1374,37 +1412,19 @@ export function AgentEditorPage() {
 
               {/* Chat input */}
               <div className="p-3 border-t shrink-0">
-                <div className="flex gap-2 items-end">
-                  <Textarea
-                    ref={inputRef}
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type a message... (Shift+Enter for new line)"
-                    disabled={isChatBusy}
-                    className="text-sm min-h-[36px] max-h-[120px] resize-none"
-                    rows={1}
-                  />
-                  {isChatBusy ? (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={handleStopExecution}
-                      className="shrink-0 h-[36px]"
-                    >
-                      <Square className="h-4 w-4" />
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      onClick={handleSendMessage}
-                      disabled={!inputValue.trim()}
-                      className="shrink-0 h-[36px]"
-                    >
-                      <Send className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
+                <ChatInputWithAttachments
+                  value={inputValue}
+                  onChange={setInputValue}
+                  onSend={handleSendMessage}
+                  placeholder="Type a message... (Shift+Enter for new line)"
+                  disabled={false}
+                  isLoading={isChatBusy}
+                  maxHeight={120}
+                  minHeight={36}
+                  size="compact"
+                  showStopButton={true}
+                  onStop={handleStopExecution}
+                />
               </div>
             </>
           )}
