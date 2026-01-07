@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .database import SessionLocal
 from .utils.builtin_tools import seed_builtin_tools
+from .utils.power_agent import seed_builtin_agents
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,14 +13,19 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown events."""
-    # Startup: seed built-in tools
+    # Startup: seed built-in tools and agents
     logger.info("Seeding built-in tools...")
     db = SessionLocal()
     try:
         seed_builtin_tools(db)
         logger.info("Built-in tools seeded successfully")
+
+        # Seed built-in agents (after tools so they can reference tool IDs)
+        logger.info("Seeding built-in agents...")
+        seed_builtin_agents(db)
+        logger.info("Built-in agents seeded successfully")
     except Exception as e:
-        logger.error(f"Failed to seed built-in tools: {e}")
+        logger.error(f"Failed to seed built-in items: {e}")
     finally:
         db.close()
 

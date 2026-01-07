@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import insert, delete as sql_delete
 from typing import List, Optional
+from pydantic import BaseModel
 import logging
 
 from ...database import get_db
@@ -86,6 +87,7 @@ def _build_agent_detail_response(agent: Agent, db: Session) -> AgentDetailRespon
         agent_type_config=agent_type_config,
         tags=agent.tags,
         is_active=agent.is_active,
+        is_builtin=agent.is_builtin,
         current_version_id=agent.current_version_id,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
@@ -168,6 +170,7 @@ def _build_agent_response(agent: Agent) -> AgentResponse:
         agent_type_config=agent_type_config,
         tags=agent.tags,
         is_active=agent.is_active,
+        is_builtin=agent.is_builtin,
         current_version_id=agent.current_version_id,
         created_at=agent.created_at,
         updated_at=agent.updated_at
@@ -180,15 +183,31 @@ def list_agents(
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     active_only: bool = Query(True, description="Only return active agents"),
     agent_type_id: Optional[int] = Query(None, description="Filter by agent type ID"),
+    include_builtin: bool = Query(True, description="Include built-in agents"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     List all agents for the current user with pagination.
+
+    Includes both user's custom agents and built-in agents (visible to all).
     """
+    from sqlalchemy import or_
+
     query = db.query(Agent).options(
         joinedload(Agent.agent_type_config)
-    ).filter(Agent.user_id == current_user.id)
+    )
+
+    # Show user's agents OR built-in agents
+    if include_builtin:
+        query = query.filter(
+            or_(
+                Agent.user_id == current_user.id,
+                Agent.is_builtin == True
+            )
+        )
+    else:
+        query = query.filter(Agent.user_id == current_user.id)
 
     if active_only:
         query = query.filter(Agent.is_active == True)
@@ -197,7 +216,8 @@ def list_agents(
         query = query.filter(Agent.agent_type_id == agent_type_id)
 
     total = query.count()
-    agents = query.order_by(Agent.updated_at.desc()).offset(skip).limit(limit).all()
+    # Order built-in agents first, then by updated_at
+    agents = query.order_by(Agent.is_builtin.desc(), Agent.updated_at.desc()).offset(skip).limit(limit).all()
 
     return AgentListResponse(
         agents=[_build_agent_response(agent) for agent in agents],
@@ -215,12 +235,19 @@ def get_agent(
 ):
     """
     Get agent details including current version.
+
+    Users can view their own agents and built-in agents.
     """
+    from sqlalchemy import or_
+
     agent = db.query(Agent).options(
         joinedload(Agent.agent_type_config)
     ).filter(
         Agent.id == agent_id,
-        Agent.user_id == current_user.id
+        or_(
+            Agent.user_id == current_user.id,
+            Agent.is_builtin == True
+        )
     ).first()
 
     if not agent:
@@ -243,13 +270,26 @@ def update_agent(
     Update agent details.
 
     If config is provided, creates a new version.
+    Built-in agents cannot be modified.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.user_id == current_user.id
-    ).first()
+    # First find the agent
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
 
     if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found"
+        )
+
+    # Prevent modifying built-in agents
+    if agent.is_builtin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Built-in agents cannot be modified. Clone to create your own copy."
+        )
+
+    # Check ownership
+    if agent.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent not found"
@@ -319,13 +359,26 @@ def delete_agent(
     Delete an agent (soft delete by default).
 
     Set hard_delete=true to permanently delete.
+    Built-in agents cannot be deleted.
     """
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.user_id == current_user.id
-    ).first()
+    # First find the agent
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
 
     if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found"
+        )
+
+    # Prevent deleting built-in agents
+    if agent.is_builtin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Built-in agents cannot be deleted"
+        )
+
+    # Check ownership
+    if agent.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent not found"
@@ -338,6 +391,83 @@ def delete_agent(
 
     db.commit()
     return None
+
+
+@router.post("/{agent_id}/clone", response_model=AgentDetailResponse, status_code=status.HTTP_201_CREATED)
+def clone_agent(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Clone an agent to create an editable copy.
+
+    Works for both user-owned agents and built-in agents.
+    The clone will be owned by the current user and fully editable.
+    """
+    from sqlalchemy import or_
+
+    # Find the agent (allow cloning both user-owned and built-in agents)
+    agent = db.query(Agent).options(
+        joinedload(Agent.agent_type_config)
+    ).filter(
+        Agent.id == agent_id,
+        or_(
+            Agent.user_id == current_user.id,
+            Agent.is_builtin == True
+        )
+    ).first()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found"
+        )
+
+    # Create clone with new name
+    clone_name = f"{agent.name} (Copy)"
+    # Check if name already exists and add number if needed
+    existing_count = db.query(Agent).filter(
+        Agent.user_id == current_user.id,
+        Agent.name.like(f"{agent.name} (Copy)%")
+    ).count()
+    if existing_count > 0:
+        clone_name = f"{agent.name} (Copy {existing_count + 1})"
+
+    # Create the cloned agent
+    cloned_agent = Agent(
+        user_id=current_user.id,
+        name=clone_name,
+        description=agent.description,
+        agent_type_id=agent.agent_type_id,
+        tags=agent.tags.copy() if agent.tags else [],
+        is_active=True,
+        is_builtin=False  # Clone is never built-in
+    )
+    db.add(cloned_agent)
+    db.flush()
+
+    # Clone the current version if it exists
+    if agent.current_version_id:
+        original_version = db.query(AgentVersion).filter(
+            AgentVersion.id == agent.current_version_id
+        ).first()
+
+        if original_version:
+            cloned_version = AgentVersion(
+                agent_id=cloned_agent.id,
+                version_number=1,
+                config=original_version.config.copy() if original_version.config else {},
+                created_by=current_user.id
+            )
+            db.add(cloned_version)
+            db.flush()
+            cloned_agent.current_version_id = cloned_version.id
+
+    db.commit()
+    db.refresh(cloned_agent)
+
+    return _build_agent_detail_response(cloned_agent, db)
 
 
 @router.get("/{agent_id}/versions", response_model=List[AgentVersionResponse])
@@ -811,4 +941,108 @@ def _server_to_response(server: MCPServerConfig) -> MCPServerConfigResponse:
         last_error=server.last_error,
         created_at=server.created_at,
         updated_at=server.updated_at,
+    )
+
+
+# ============= POWER AGENT ENDPOINTS =============
+
+class PowerAgentCreateRequest(BaseModel):
+    """Request to create a Power Agent"""
+    provider_id: Optional[int] = None
+    custom_name: Optional[str] = None
+
+
+class PowerAgentResponse(BaseModel):
+    """Response for Power Agent creation"""
+    success: bool
+    message: str
+    agent_id: Optional[int] = None
+    tool_count: Optional[int] = None
+
+
+class DemoScenario(BaseModel):
+    """Demo scenario schema"""
+    name: str
+    description: str
+    example_prompt: str
+    tags: List[str]
+
+
+class PowerAgentConfigResponse(BaseModel):
+    """Response with Power Agent configuration"""
+    name: str
+    description: str
+    system_prompt: str
+    demo_scenarios: List[DemoScenario]
+
+
+@router.post("/power-agent/create", response_model=PowerAgentResponse)
+def create_power_agent(
+    request: PowerAgentCreateRequest = PowerAgentCreateRequest(),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a Power Agent for the current user.
+
+    The Power Agent comes pre-configured with all available tools:
+    - Web Search & Fetch for research
+    - File management (read, write, edit, list, search)
+    - Task Manager for project planning
+    - Scratchpad for working memory
+    - Python Code Execution
+    - HTTP Request for APIs
+
+    If a Power Agent already exists for the user, returns the existing agent ID.
+    """
+    from ...utils.power_agent import create_power_agent_for_user
+
+    result = create_power_agent_for_user(
+        db=db,
+        user_id=current_user.id,
+        provider_id=request.provider_id,
+        custom_name=request.custom_name
+    )
+
+    if result["success"]:
+        return PowerAgentResponse(
+            success=True,
+            message="Power Agent created successfully",
+            agent_id=result["agent_id"],
+            tool_count=result["tool_count"]
+        )
+    else:
+        # Check if it's because agent already exists
+        if "already exists" in result.get("error", ""):
+            return PowerAgentResponse(
+                success=True,
+                message="Power Agent already exists",
+                agent_id=result.get("agent_id"),
+                tool_count=None
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.get("error", "Failed to create Power Agent")
+        )
+
+
+@router.get("/power-agent/config", response_model=PowerAgentConfigResponse)
+def get_power_agent_config(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the Power Agent configuration and demo scenarios.
+
+    Returns the system prompt and demo scenarios that can be used
+    as starting points for using the Power Agent.
+    """
+    from ...utils.power_agent import get_power_agent_config, DEMO_SCENARIOS
+
+    config = get_power_agent_config()
+
+    return PowerAgentConfigResponse(
+        name=config["config"]["name"],
+        description=config["config"]["description"],
+        system_prompt=config["system_prompt"],
+        demo_scenarios=[DemoScenario(**s) for s in DEMO_SCENARIOS]
     )

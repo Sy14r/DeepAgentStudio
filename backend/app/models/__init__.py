@@ -6,6 +6,10 @@ from .prompt import Prompt, PromptVersion, MessageType, PromptUseCase
 from .session import Session, Message, TraceStep, SessionStatus, MessageRole, TraceStepType
 from .llm_provider import LLMProviderConfig, LLMProviderType
 from .mcp_server import MCPServerConfig, MCPTransportType, agent_mcp_servers
+from .workspace import (
+    SessionWorkspace, SessionTask, SessionScratchpad, SearchProviderConfig,
+    TaskStatus, SearchProviderType
+)
 
 __all__ = [
     "User",
@@ -15,5 +19,7 @@ __all__ = [
     "Prompt", "PromptVersion", "MessageType", "PromptUseCase",
     "Session", "Message", "TraceStep", "SessionStatus", "MessageRole", "TraceStepType",
     "LLMProviderConfig", "LLMProviderType",
-    "MCPServerConfig", "MCPTransportType", "agent_mcp_servers"
+    "MCPServerConfig", "MCPTransportType", "agent_mcp_servers",
+    "SessionWorkspace", "SessionTask", "SessionScratchpad", "SearchProviderConfig",
+    "TaskStatus", "SearchProviderType"
 ]

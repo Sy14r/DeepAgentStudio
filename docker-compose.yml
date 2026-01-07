@@ -32,6 +32,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - workspace_data:/var/lib/deepagent/workspaces
     environment:
       DATABASE_URL: postgresql://deepagent:deepagent@postgres:5432/deepagentstudio
       JWT_SECRET_KEY: dev-secret-key-change-in-production-min-32-chars-required
@@ -44,6 +45,10 @@ services:
       # LLM Provider API Keys (loaded from .env file if present)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Workspace configuration
+      WORKSPACE_BASE_PATH: /var/lib/deepagent/workspaces
+      WORKSPACE_MAX_SIZE_MB: 100
+      WORKSPACE_FILE_MAX_SIZE_MB: 10
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     networks:
       - deepagent_network
@@ -67,6 +72,7 @@ services:
 
 volumes:
   postgres_data:
+  workspace_data:
 
 networks:
   deepagent_network:

@@ -125,13 +125,14 @@ class AgentUpdate(BaseModel):
 class AgentResponse(BaseModel):
     """Schema for agent responses"""
     id: int
-    user_id: int
+    user_id: Optional[int] = None  # Nullable for built-in agents
     name: str
     description: Optional[str] = None
     agent_type_id: int
     agent_type_config: Optional[Dict[str, Any]] = None  # AgentTypeConfigCompact as dict
     tags: List[str] = []
     is_active: bool
+    is_builtin: bool = False  # Built-in agents visible to all users
     current_version_id: Optional[int]
     created_at: datetime
     updated_at: Optional[datetime]

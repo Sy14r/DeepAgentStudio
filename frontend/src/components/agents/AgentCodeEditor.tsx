@@ -63,7 +63,7 @@ const AGENT_SCHEMA = {
     description: {
       type: 'string',
       description: 'A description of what this agent does',
-      maxLength: 500,
+      maxLength: 2000,
     },
     agent_type_id: {
       type: 'number',

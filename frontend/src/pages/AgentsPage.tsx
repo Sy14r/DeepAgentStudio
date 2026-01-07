@@ -42,6 +42,7 @@ import {
   Play,
   ChevronLeft,
   ChevronRight,
+  Lock,
 } from 'lucide-react';
 import { useAgents, useDeleteAgent, useCloneAgent, useAgentTypes, getErrorMessage } from '@/api/hooks';
 import { Agent } from '@/api/types';
@@ -62,6 +63,12 @@ function AgentCard({ agent, onEdit, onClone, onDelete, onPlayground }: AgentCard
           <div className="flex items-center gap-2">
             <Bot className="h-5 w-5 text-primary" />
             <CardTitle className="text-lg">{agent.name}</CardTitle>
+            {agent.is_builtin && (
+              <Badge variant="secondary" className="text-xs">
+                <Lock className="mr-1 h-3 w-3" />
+                Built-in
+              </Badge>
+            )}
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -76,7 +83,7 @@ function AgentCard({ agent, onEdit, onClone, onDelete, onPlayground }: AgentCard
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => onEdit(agent.id)}>
                 <Pencil className="mr-2 h-4 w-4" />
-                Edit
+                {agent.is_builtin ? 'View' : 'Edit'}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onClone(agent.id)}>
                 <Copy className="mr-2 h-4 w-4" />
@@ -86,14 +93,18 @@ function AgentCard({ agent, onEdit, onClone, onDelete, onPlayground }: AgentCard
                 <Play className="mr-2 h-4 w-4" />
                 Open in Playground
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive"
-                onClick={() => onDelete(agent.id)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
+              {!agent.is_builtin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={() => onDelete(agent.id)}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -135,6 +146,12 @@ function AgentListItem({ agent, onEdit, onClone, onDelete, onPlayground }: Agent
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <h3 className="font-semibold truncate">{agent.name}</h3>
+          {agent.is_builtin && (
+            <Badge variant="secondary" className="shrink-0 text-xs">
+              <Lock className="mr-1 h-3 w-3" />
+              Built-in
+            </Badge>
+          )}
           <Badge variant="secondary" className="shrink-0">
             {agent.agent_type_config?.name || 'Unknown Type'}
           </Badge>
@@ -168,14 +185,18 @@ function AgentListItem({ agent, onEdit, onClone, onDelete, onPlayground }: Agent
               <Copy className="mr-2 h-4 w-4" />
               Clone
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive"
-              onClick={() => onDelete(agent.id)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </DropdownMenuItem>
+            {!agent.is_builtin && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onClick={() => onDelete(agent.id)}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

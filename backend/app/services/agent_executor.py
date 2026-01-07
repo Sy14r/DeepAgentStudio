@@ -28,11 +28,13 @@ from ..models.agent_type import ExecutionStrategy
 from ..models.mcp_server import MCPServerConfig
 from ..models.session import Session, SessionStatus, TraceStepType
 from .llm_adapter import LLMProviderAdapter, LLMAdapterError, create_llm_from_agent_config
-from .tool_wrapper import ToolLoader, load_agent_tools
+from .tool_wrapper import ToolLoader, load_agent_tools, WORKSPACE_TOOL_CLASSES
 from .mcp_client import MCPConnectionPool
 from .mcp_tool_wrapper import create_mcp_tools_for_agent, MCPToolWrapper
 from .session_recorder import SessionRecorder, create_session_recorder
 from .memory import ConversationMemoryService
+from .workspace_tools import create_workspace_tools, WORKSPACE_TOOL_NAMES
+from .web_tools import create_web_tools, WEB_TOOL_CLASSES
 from ..encryption import decrypt_api_key
 import json
 import asyncio
@@ -300,16 +302,55 @@ class AgentExecutorService:
             mcp_pool = MCPConnectionPool()
             mcp_tools = await self._load_mcp_tools(agent_id, mcp_pool, recorder)
 
+            # Load workspace tools if any workspace tool IDs are in config
+            workspace_tools = []
+            tool_ids = config.get("tool_ids", [])
+            if tool_ids:
+                # Check if any tool_ids are workspace tools
+                from ..models import Tool
+                workspace_tool_requested = self.db.query(Tool).filter(
+                    Tool.id.in_(tool_ids),
+                    Tool.langchain_class.in_(list(WORKSPACE_TOOL_CLASSES.keys()))
+                ).first()
+
+                if workspace_tool_requested:
+                    # Create workspace tools with session context
+                    workspace_tools = create_workspace_tools(self.db, session.id)
+                    recorder.record_trace_step(
+                        TraceStepType.THOUGHT,
+                        content=f"Created {len(workspace_tools)} workspace tools for session {session.id}"
+                    )
+
+            # Load web tools if any web tool IDs are in config
+            web_tools = []
+            if tool_ids:
+                # Check if any tool_ids are web tools
+                from ..models import Tool
+                web_tool_requested = self.db.query(Tool).filter(
+                    Tool.id.in_(tool_ids),
+                    Tool.langchain_class.in_(list(WEB_TOOL_CLASSES.keys()))
+                ).first()
+
+                if web_tool_requested:
+                    # Create web tools
+                    web_tools = create_web_tools()
+                    recorder.record_trace_step(
+                        TraceStepType.THOUGHT,
+                        content=f"Created {len(web_tools)} web tools for research"
+                    )
+
             # Combine all tools
-            all_tools = tools + mcp_tools
+            all_tools = tools + mcp_tools + workspace_tools + web_tools
 
             if all_tools:
                 regular_count = len(tools)
                 mcp_count = len(mcp_tools)
+                workspace_count = len(workspace_tools)
+                web_count = len(web_tools)
                 tool_names = [t.name for t in all_tools]
                 recorder.record_trace_step(
                     TraceStepType.THOUGHT,
-                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP): {tool_names}"
+                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP, {workspace_count} workspace, {web_count} web): {tool_names}"
                 )
 
             # Load chat history if continuing a session

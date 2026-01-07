@@ -36,6 +36,36 @@ BUILTIN_TOOL_REGISTRY: Dict[str, Callable[[], BaseTool]] = {
     "HTTPRequest": lambda: _create_http_request_tool(),
 }
 
+# Workspace tools that require session context (created dynamically)
+# These tool names map to langchain_class values for database records
+WORKSPACE_TOOL_CLASSES = {
+    "WorkspaceFileRead": "file_read",
+    "WorkspaceFileWrite": "file_write",
+    "WorkspaceFileEdit": "file_edit",
+    "WorkspaceFileList": "file_list",
+    "WorkspaceFileSearch": "file_search",
+    "WorkspaceTaskManager": "task_manager",
+    "WorkspaceScratchpad": "scratchpad",
+}
+
+# Web tools (created dynamically, no session context needed)
+WEB_TOOL_CLASSES = {
+    "WebSearch": "web_search",
+    "WebFetch": "web_fetch",
+}
+
+def is_workspace_tool_class(langchain_class: str) -> bool:
+    """Check if a langchain_class is a workspace tool that needs session context"""
+    return langchain_class in WORKSPACE_TOOL_CLASSES
+
+def is_web_tool_class(langchain_class: str) -> bool:
+    """Check if a langchain_class is a web tool"""
+    return langchain_class in WEB_TOOL_CLASSES
+
+def is_dynamic_tool_class(langchain_class: str) -> bool:
+    """Check if a langchain_class requires dynamic creation (workspace or web)"""
+    return langchain_class in WORKSPACE_TOOL_CLASSES or langchain_class in WEB_TOOL_CLASSES
+
 
 def _create_python_execution_tool() -> BaseTool:
     """
@@ -574,6 +604,13 @@ class ToolLoader:
 
         if not langchain_class:
             logger.warning(f"Built-in tool {tool_model.name} has no langchain_class")
+            return None
+
+        # Skip workspace and web tools here - they are created dynamically
+        # Workspace tools: created by create_workspace_tools() with session context
+        # Web tools: created by create_web_tools() for simple runtime creation
+        if is_dynamic_tool_class(langchain_class):
+            logger.debug(f"Skipping dynamic tool {tool_model.name} - created at runtime")
             return None
 
         if langchain_class not in BUILTIN_TOOL_REGISTRY:

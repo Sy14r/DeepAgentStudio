@@ -16,6 +16,22 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ### Recent Updates (2026-01-06)
 
+**Advanced Agent Toolkit - Phase 1-4 Complete** ✅
+- Implemented 7 new workspace tools for autonomous agent operation:
+  - **File Read** - Read workspace files with optional line ranges
+  - **File Write** - Create/overwrite files with auto directory creation
+  - **File Edit** - Targeted string replacement editing
+  - **File List** - Glob pattern file listing with metadata
+  - **File Search** - Regex content search with context
+  - **Task Manager** - Persistent task tracking (pending/in_progress/completed/blocked)
+  - **Scratchpad** - Working notes storage organized by sections
+- Database models: SessionWorkspace, SessionTask, SessionScratchpad, SearchProviderConfig
+- Migration: `a1b2c3d4e5f6_add_workspace_tables.py`
+- WorkspaceService with dual persistence (DB + workspace files)
+- Tools integrated into both streaming and non-streaming agent executors
+- Tools visible in UI (9 total tools now available)
+- See `ADVANCED_AGENT_TOOLKIT_SPEC.md` for full specification
+
 **Session Detail Dialog Auto-Refresh** ✅
 - Fixed trace view only showing "thought" steps during active sessions
 - Dialog now auto-refreshes every second while session is "running" or "pending"
@@ -331,13 +347,17 @@ users (5 columns)
 ├── prompts (10 columns)
 │   └── prompt_versions (9 columns)
 ├── llm_provider_configs (10 columns)
-└── sessions (15 columns)
-    ├── messages (8 columns)
-    └── trace_steps (10 columns)
+├── sessions (15 columns)
+│   ├── messages (8 columns)
+│   ├── trace_steps (10 columns)
+│   ├── session_workspaces (7 columns)
+│   ├── session_tasks (9 columns)
+│   └── session_scratchpads (5 columns)
+└── search_provider_configs (7 columns)
 ```
 
-**Total Tables**: 14
-**Migrations**: 6 Alembic migrations applied
+**Total Tables**: 18
+**Migrations**: 7 Alembic migrations applied
 
 ---
 
@@ -347,8 +367,8 @@ users (5 columns)
 |--------|-------|
 | Backend Python Files | ~45 |
 | Frontend TypeScript Files | ~70 |
-| Models | 11 (User, Agent, AgentVersion, Tool, MCPServerConfig, Prompt, PromptVersion, Session, Message, TraceStep, LLMProviderConfig) |
-| Services | 10 (SandboxService, LLMProviderAdapter, ToolWrapper, SessionRecorder, AgentExecutorService, StreamingExecutorService, ConversationMemoryService, MCPClient, MCPToolWrapper, StreamingCallback) |
+| Models | 15 (User, Agent, AgentVersion, Tool, MCPServerConfig, Prompt, PromptVersion, Session, Message, TraceStep, LLMProviderConfig, SessionWorkspace, SessionTask, SessionScratchpad, SearchProviderConfig) |
+| Services | 12 (SandboxService, LLMProviderAdapter, ToolWrapper, SessionRecorder, AgentExecutorService, StreamingExecutorService, ConversationMemoryService, MCPClient, MCPToolWrapper, StreamingCallback, WorkspaceService, WorkspaceTools) |
 | API Routers | 8 |
 | Test Files | 20 (backend) + 19 (frontend) |
 | UI Components | 18 (shadcn/ui) |
@@ -448,6 +468,7 @@ curl -X POST http://localhost:8000/api/v1/agents/1/invoke \
 |----------|-------------|
 | `SPEC.md` | Product specification |
 | `FRONTEND-SPEC.md` | Frontend implementation spec |
+| `ADVANCED_AGENT_TOOLKIT_SPEC.md` | Workspace tools for autonomous agents |
 | `README.md` | Project overview & quick start |
 | `TESTING.md` | Testing guide |
 | `VERIFICATION_GUIDE.md` | Verification procedures |

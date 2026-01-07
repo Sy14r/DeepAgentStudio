@@ -54,6 +54,18 @@ from .memory import (
     load_session_memory
 )
 
+from .workspace import (
+    WorkspaceService,
+    WorkspaceResult,
+    get_workspace_service
+)
+
+from .workspace_tools import (
+    create_workspace_tools,
+    is_workspace_tool,
+    WORKSPACE_TOOL_NAMES
+)
+
 __all__ = [
     # Sandbox
     "SandboxService",
@@ -89,4 +101,12 @@ __all__ = [
     # Memory
     "ConversationMemoryService",
     "load_session_memory",
+    # Workspace
+    "WorkspaceService",
+    "WorkspaceResult",
+    "get_workspace_service",
+    # Workspace Tools
+    "create_workspace_tools",
+    "is_workspace_tool",
+    "WORKSPACE_TOOL_NAMES",
 ]

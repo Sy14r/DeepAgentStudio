@@ -47,7 +47,7 @@ import { AgentCreateRequest } from '@/api/types';
 
 const agentFormSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100, 'Name must be less than 100 characters'),
-  description: z.string().max(500, 'Description must be less than 500 characters').optional(),
+  description: z.string().max(2000, 'Description must be less than 2000 characters').optional(),
   agent_type_id: z.number().min(1, 'Agent type is required'),
   tags: z.array(z.string()).default([]),
   provider_id: z.number().nullable(),

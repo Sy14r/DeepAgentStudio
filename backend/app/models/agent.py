@@ -10,7 +10,7 @@ class Agent(Base):
     __tablename__ = "agents"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)  # Nullable for built-in agents
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
 
@@ -19,6 +19,7 @@ class Agent(Base):
 
     tags = Column(JSON, default=list, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    is_builtin = Column(Boolean, default=False, nullable=False, index=True)  # Built-in agents visible to all
 
     # Reference to current active version
     current_version_id = Column(Integer, ForeignKey("agent_versions.id"), nullable=True)

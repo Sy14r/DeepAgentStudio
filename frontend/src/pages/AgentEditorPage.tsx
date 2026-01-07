@@ -53,12 +53,14 @@ import {
   Wifi,
   WifiOff,
   Square,
-  Wrench,
+  Copy,
+  Lock,
 } from 'lucide-react';
 import {
   useAgent,
   useCreateAgent,
   useUpdateAgent,
+  useCloneAgent,
   useLLMProviders,
   useTools,
   useMCPServers,
@@ -76,7 +78,7 @@ import { SessionDetailDialog } from '@/components/sessions';
 // Form schema
 const agentFormSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100, 'Name must be less than 100 characters'),
-  description: z.string().max(500, 'Description must be less than 500 characters').optional(),
+  description: z.string().max(2000, 'Description must be less than 2000 characters').optional(),
   agent_type_id: z.number().min(1, 'Agent type is required'),
   tags: z.array(z.string()).default([]),
   provider_id: z.number().nullable(),
@@ -206,8 +208,12 @@ export function AgentEditorPage() {
 
   const createAgent = useCreateAgent();
   const updateAgent = useUpdateAgent(agentId ?? 0);
+  const cloneAgent = useCloneAgent();
   const invokeAgent = useInvokeAgent(agentId ?? 0);
   const assignMCPServers = useAssignAgentMCPServers(agentId ?? 0);
+
+  // Check if agent is built-in (read-only)
+  const isBuiltIn = agent?.is_builtin ?? false;
 
   // WebSocket streaming callbacks
   const handleToolCall = (payload: ToolCallPayload, wsSessionId: number) => {
@@ -615,30 +621,61 @@ export function AgentEditorPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
               {currentAgentName}
-              {hasUnsavedChanges && (
+              {isBuiltIn && (
+                <Badge variant="secondary" className="text-xs">
+                  <Lock className="mr-1 h-3 w-3" />
+                  Built-in
+                </Badge>
+              )}
+              {hasUnsavedChanges && !isBuiltIn && (
                 <Badge variant="outline" className="text-yellow-600">
                   Unsaved
                 </Badge>
               )}
             </h1>
             <p className="text-sm text-muted-foreground">
-              {isEditing ? 'Edit agent configuration' : 'Create a new agent'}
+              {isBuiltIn
+                ? 'View built-in agent configuration (read-only)'
+                : isEditing
+                ? 'Edit agent configuration'
+                : 'Create a new agent'}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={handleCancel}>
             <X className="mr-2 h-4 w-4" />
-            Cancel
+            {isBuiltIn ? 'Back' : 'Cancel'}
           </Button>
-          <Button onClick={form.handleSubmit(onSubmit)} disabled={isPending}>
-            {isPending ? (
-              <Spinner className="mr-2 h-4 w-4" />
-            ) : (
-              <Save className="mr-2 h-4 w-4" />
-            )}
-            {isEditing ? 'Save' : 'Create'}
-          </Button>
+          {isBuiltIn ? (
+            <Button
+              onClick={async () => {
+                try {
+                  const cloned = await cloneAgent.mutateAsync(agentId!);
+                  navigate(`/agents/${cloned.id}/edit`);
+                } catch (err) {
+                  setError(getErrorMessage(err));
+                }
+              }}
+              disabled={cloneAgent.isPending}
+            >
+              {cloneAgent.isPending ? (
+                <Spinner className="mr-2 h-4 w-4" />
+              ) : (
+                <Copy className="mr-2 h-4 w-4" />
+              )}
+              Clone to Edit
+            </Button>
+          ) : (
+            <Button onClick={form.handleSubmit(onSubmit)} disabled={isPending}>
+              {isPending ? (
+                <Spinner className="mr-2 h-4 w-4" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              {isEditing ? 'Save' : 'Create'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -647,6 +684,16 @@ export function AgentEditorPage() {
         <Alert variant="destructive" className="shrink-0">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Built-in agent read-only notice */}
+      {isBuiltIn && (
+        <Alert className="shrink-0 border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950">
+          <Lock className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+          <AlertDescription className="text-blue-800 dark:text-blue-200">
+            This is a built-in agent and cannot be modified. Click "Clone to Edit" to create your own editable copy.
+          </AlertDescription>
         </Alert>
       )}
 

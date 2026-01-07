@@ -122,13 +122,14 @@ export interface AgentTypeConfigCompact {
 
 export interface Agent {
   id: number;
-  user_id: number;
+  user_id: number | null;
   name: string;
   description: string | null;
   agent_type_id: number;
   agent_type_config: AgentTypeConfigCompact | null;
   tags: string[];
   is_active: boolean;
+  is_builtin: boolean;
   current_version_id: number | null;
   created_at: string;
   updated_at: string | null;
