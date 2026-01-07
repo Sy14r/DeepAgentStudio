@@ -6,29 +6,28 @@ import {
   AgentCreateRequest,
   AgentUpdateRequest,
   AgentListResponse,
-  AgentType,
 } from '@/api/types';
 
 interface UseAgentsParams {
   page?: number;
   pageSize?: number;
   search?: string;
-  agentType?: AgentType;
+  agentTypeId?: number;
   tags?: string[];
   isActive?: boolean;
 }
 
 export function useAgents(params: UseAgentsParams = {}) {
-  const { page = 1, pageSize = 10, search, agentType, tags, isActive } = params;
+  const { page = 1, pageSize = 10, search, agentTypeId, tags, isActive } = params;
 
   return useQuery({
-    queryKey: ['agents', { page, pageSize, search, agentType, tags, isActive }],
+    queryKey: ['agents', { page, pageSize, search, agentTypeId, tags, isActive }],
     queryFn: async (): Promise<AgentListResponse> => {
       const searchParams = new URLSearchParams();
       searchParams.append('page', page.toString());
       searchParams.append('page_size', pageSize.toString());
       if (search) searchParams.append('search', search);
-      if (agentType) searchParams.append('agent_type', agentType);
+      if (agentTypeId !== undefined) searchParams.append('agent_type_id', agentTypeId.toString());
       if (tags && tags.length > 0) {
         tags.forEach((tag) => searchParams.append('tags', tag));
       }

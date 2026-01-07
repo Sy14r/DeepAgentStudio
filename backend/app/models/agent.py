@@ -1,17 +1,7 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Enum as SQLEnum, JSON
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from enum import Enum
 from ..database import Base
-
-
-class AgentType(str, Enum):
-    """Agent type enumeration"""
-    REACT = "ReAct"
-    PLAN_AND_EXECUTE = "Plan-and-Execute"
-    CONVERSATIONAL = "Conversational"
-    CUSTOM = "Custom"
 
 
 class Agent(Base):
@@ -23,7 +13,10 @@ class Agent(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
-    agent_type = Column(SQLEnum(AgentType), nullable=False, default=AgentType.REACT)
+
+    # FK to agent_type_configs for execution strategy
+    agent_type_id = Column(Integer, ForeignKey("agent_type_configs.id"), nullable=False, index=True)
+
     tags = Column(JSON, default=list, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
 
@@ -35,6 +28,7 @@ class Agent(Base):
 
     # Relationships
     user = relationship("User", back_populates="agents")
+    agent_type_config = relationship("AgentTypeConfig", back_populates="agents")
     versions = relationship(
         "AgentVersion",
         back_populates="agent",
@@ -54,7 +48,8 @@ class Agent(Base):
     )
 
     def __repr__(self):
-        return f"<Agent(id={self.id}, name='{self.name}', type='{self.agent_type.value}')>"
+        type_name = self.agent_type_config.name if self.agent_type_config else "unknown"
+        return f"<Agent(id={self.id}, name='{self.name}', type='{type_name}')>"
 
 
 class AgentVersion(Base):

@@ -3,6 +3,8 @@ export { RegisterPage } from './RegisterPage';
 export { DashboardPage } from './DashboardPage';
 export { AgentsPage } from './AgentsPage';
 export { AgentEditorPage } from './AgentEditorPage';
+export { AgentTypesPage } from './AgentTypesPage';
+export { AgentTypeEditorPage } from './AgentTypeEditorPage';
 export { ToolsPage } from './ToolsPage';
 export { ToolEditorPage } from './ToolEditorPage';
 export { MCPServerEditorPage } from './MCPServerEditorPage';

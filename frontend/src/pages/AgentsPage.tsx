@@ -43,10 +43,8 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { useAgents, useDeleteAgent, useCloneAgent, getErrorMessage } from '@/api/hooks';
-import { Agent, AgentType } from '@/api/types';
-
-const AGENT_TYPES: AgentType[] = ['ReAct', 'Plan-and-Execute', 'Conversational', 'Custom'];
+import { useAgents, useDeleteAgent, useCloneAgent, useAgentTypes, getErrorMessage } from '@/api/hooks';
+import { Agent } from '@/api/types';
 
 interface AgentCardProps {
   agent: Agent;
@@ -105,7 +103,9 @@ function AgentCard({ agent, onEdit, onClone, onDelete, onPlayground }: AgentCard
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap gap-2">
-          <Badge variant="secondary">{agent.agent_type}</Badge>
+          <Badge variant="secondary">
+            {agent.agent_type_config?.name || 'Unknown Type'}
+          </Badge>
           {agent.tags?.slice(0, 3).map((tag) => (
             <Badge key={tag} variant="outline">
               {tag}
@@ -136,7 +136,7 @@ function AgentListItem({ agent, onEdit, onClone, onDelete, onPlayground }: Agent
         <div className="flex items-center gap-2">
           <h3 className="font-semibold truncate">{agent.name}</h3>
           <Badge variant="secondary" className="shrink-0">
-            {agent.agent_type}
+            {agent.agent_type_config?.name || 'Unknown Type'}
           </Badge>
         </div>
         <p className="text-sm text-muted-foreground truncate">
@@ -195,11 +195,14 @@ export function AgentsPage() {
 
   const pageSize = 12;
 
+  const { data: agentTypesData } = useAgentTypes({ isActive: true });
+  const agentTypes = agentTypesData?.agent_types || [];
+
   const { data, isLoading, error } = useAgents({
     page,
     pageSize,
     search: search || undefined,
-    agentType: agentTypeFilter !== 'all' ? (agentTypeFilter as AgentType) : undefined,
+    agentTypeId: agentTypeFilter !== 'all' ? parseInt(agentTypeFilter) : undefined,
   });
 
   const deleteAgent = useDeleteAgent();
@@ -277,14 +280,15 @@ export function AgentsPage() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-[180px]">
+          <SelectTrigger className="w-[200px]">
             <SelectValue placeholder="Agent Type" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
-            {AGENT_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
-                {type}
+            {agentTypes.map((agentType) => (
+              <SelectItem key={agentType.id} value={agentType.id.toString()}>
+                {agentType.name}
+                {agentType.is_builtin ? '' : ' (Custom)'}
               </SelectItem>
             ))}
           </SelectContent>

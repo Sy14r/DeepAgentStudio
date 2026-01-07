@@ -1,6 +1,5 @@
 from .user import UserBase, UserCreate, UserUpdate, UserResponse, Token, TokenData
 from .agent import (
-    AgentType,
     LLMConfig,
     ReflectionConfig,
     MemoryConfig,
@@ -14,6 +13,18 @@ from .agent import (
     AgentDetailResponse,
     AgentListResponse,
     AgentRollbackRequest,
+)
+from .agent_type import (
+    ExecutionStrategy,
+    DefaultLLMConfig,
+    DefaultMemoryConfig,
+    RecommendedToolInfo,
+    AgentTypeConfigBase,
+    AgentTypeConfigCreate,
+    AgentTypeConfigUpdate,
+    AgentTypeConfigResponse,
+    AgentTypeConfigListResponse,
+    AgentTypeConfigCompact,
 )
 from .tool import (
     ToolType,
@@ -78,7 +89,6 @@ __all__ = [
     "Token",
     "TokenData",
     # Agent schemas
-    "AgentType",
     "LLMConfig",
     "ReflectionConfig",
     "MemoryConfig",
@@ -92,6 +102,17 @@ __all__ = [
     "AgentDetailResponse",
     "AgentListResponse",
     "AgentRollbackRequest",
+    # Agent Type schemas
+    "ExecutionStrategy",
+    "DefaultLLMConfig",
+    "DefaultMemoryConfig",
+    "RecommendedToolInfo",
+    "AgentTypeConfigBase",
+    "AgentTypeConfigCreate",
+    "AgentTypeConfigUpdate",
+    "AgentTypeConfigResponse",
+    "AgentTypeConfigListResponse",
+    "AgentTypeConfigCompact",
     # Tool schemas
     "ToolType",
     "ToolCategory",

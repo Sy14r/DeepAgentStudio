@@ -1,15 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from enum import Enum
-
-
-class AgentType(str, Enum):
-    """Agent type enumeration"""
-    REACT = "ReAct"
-    PLAN_AND_EXECUTE = "Plan-and-Execute"
-    CONVERSATIONAL = "Conversational"
-    CUSTOM = "Custom"
 
 
 # Configuration schemas for JSONB fields
@@ -91,7 +82,7 @@ class AgentBase(BaseModel):
     """Base agent schema with common fields"""
     name: str = Field(..., min_length=1, max_length=255, description="Agent name")
     description: Optional[str] = Field(default=None, description="Agent description")
-    agent_type: AgentType = Field(default=AgentType.REACT, description="Agent type")
+    agent_type_id: int = Field(..., description="ID of the agent type configuration")
     tags: List[str] = Field(default=[], description="Agent tags for categorization")
 
     @field_validator('tags')
@@ -115,7 +106,7 @@ class AgentUpdate(BaseModel):
     """Schema for updating an agent"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
-    agent_type: Optional[AgentType] = None
+    agent_type_id: Optional[int] = Field(None, description="ID of the agent type configuration")
     tags: Optional[List[str]] = None
     config: Optional[AgentVersionConfig] = None  # If provided, creates new version
 
@@ -131,10 +122,15 @@ class AgentUpdate(BaseModel):
         from_attributes = True
 
 
-class AgentResponse(AgentBase):
+class AgentResponse(BaseModel):
     """Schema for agent responses"""
     id: int
     user_id: int
+    name: str
+    description: Optional[str] = None
+    agent_type_id: int
+    agent_type_config: Optional[Dict[str, Any]] = None  # AgentTypeConfigCompact as dict
+    tags: List[str] = []
     is_active: bool
     current_version_id: Optional[int]
     created_at: datetime

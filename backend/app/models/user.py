@@ -19,6 +19,7 @@ class User(Base):
 
     # Relationships
     agents = relationship("Agent", back_populates="user", cascade="all, delete-orphan")
+    agent_types = relationship("AgentTypeConfig", back_populates="user", cascade="all, delete-orphan")
     tools = relationship("Tool", back_populates="user", cascade="all, delete-orphan")
     prompts = relationship("Prompt", back_populates="user", cascade="all, delete-orphan")
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")

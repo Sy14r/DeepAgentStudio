@@ -16,6 +16,20 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ### Recent Updates (2026-01-06)
 
+**Session Detail Dialog Auto-Refresh** ✅
+- Fixed trace view only showing "thought" steps during active sessions
+- Dialog now auto-refreshes every second while session is "running" or "pending"
+- All trace step types now display correctly: Thought, Tool Call, Tool Result, Final Answer
+- Polling stops automatically when session completes or fails
+- Root cause: Dialog fetched data once and never updated for in-progress sessions
+
+**Agent Editor Test Chat Streaming** ✅
+- Added WebSocket streaming support to test chat panel in AgentEditorPage
+- Real-time display of agent thoughts and tool calls during execution
+- Streaming toggle and connection status indicator
+- Stop/cancel execution functionality
+- Consistent with Playground streaming behavior
+
 **Dashboard Now Functional** ✅
 - Dashboard landing page now fetches and displays real data from API
 - Stats cards show actual counts: Agents, Tools, Prompts, Sessions

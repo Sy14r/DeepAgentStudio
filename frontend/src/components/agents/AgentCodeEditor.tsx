@@ -16,10 +16,11 @@ import {
   useUpdateAgent,
   useLLMProviders,
   useTools,
+  useAgentTypes,
   getErrorMessage,
 } from '@/api/hooks';
 import { useUIStore } from '@/stores/uiStore';
-import { AgentCreateRequest, AgentConfig } from '@/api/types';
+import { AgentCreateRequest } from '@/api/types';
 
 interface AgentCodeEditorProps {
   open: boolean;
@@ -28,11 +29,11 @@ interface AgentCodeEditorProps {
   agentId: number | null;
 }
 
-// Default agent configuration template
+// Default agent configuration template (agent_type_id will be set dynamically)
 const DEFAULT_AGENT_CONFIG: AgentCreateRequest = {
   name: 'My Agent',
   description: 'A helpful AI agent',
-  agent_type: 'ReAct',
+  agent_type_id: 0, // Will be set to first available agent type
   tags: [],
   config: {
     llm_config: {
@@ -51,7 +52,7 @@ const DEFAULT_AGENT_CONFIG: AgentCreateRequest = {
 // JSON schema for agent configuration (for Monaco intellisense)
 const AGENT_SCHEMA = {
   type: 'object',
-  required: ['name', 'agent_type', 'config'],
+  required: ['name', 'agent_type_id', 'config'],
   properties: {
     name: {
       type: 'string',
@@ -64,10 +65,9 @@ const AGENT_SCHEMA = {
       description: 'A description of what this agent does',
       maxLength: 500,
     },
-    agent_type: {
-      type: 'string',
-      enum: ['ReAct', 'Plan-and-Execute', 'Conversational', 'Custom'],
-      description: 'The type of agent architecture to use',
+    agent_type_id: {
+      type: 'number',
+      description: 'ID of the agent type configuration to use',
     },
     tags: {
       type: 'array',
@@ -143,6 +143,7 @@ export function AgentCodeEditor({ open, onClose, onSuccess, agentId }: AgentCode
   const { data: agent, isLoading: isLoadingAgent } = useAgent(agentId ?? undefined);
   const { data: providersData } = useLLMProviders({ pageSize: 100 });
   const { data: toolsData } = useTools({ pageSize: 100 });
+  const { data: agentTypesData } = useAgentTypes({ isActive: true });
 
   const createAgent = useCreateAgent();
   const updateAgent = useUpdateAgent(agentId ?? 0);
@@ -164,14 +165,22 @@ export function AgentCodeEditor({ open, onClose, onSuccess, agentId }: AgentCode
       const agentConfig: AgentCreateRequest = {
         name: agent.name,
         description: agent.description || undefined,
-        agent_type: agent.agent_type,
+        agent_type_id: agent.agent_type_id,
         tags: agent.tags || [],
         config: agent.current_version?.config || DEFAULT_AGENT_CONFIG.config,
       };
       setCode(JSON.stringify(agentConfig, null, 2));
-    } else if (!isEditing) {
+    } else if (!isEditing && agentTypesData) {
       // Use default template for new agents
       const defaultConfig = { ...DEFAULT_AGENT_CONFIG };
+
+      // Set agent_type_id to first available agent type
+      const defaultAgentType = agentTypesData.agent_types.find(
+        at => at.execution_strategy === 'react' && at.is_builtin
+      ) || agentTypesData.agent_types[0];
+      if (defaultAgentType) {
+        defaultConfig.agent_type_id = defaultAgentType.id;
+      }
 
       // Set provider_id to first available provider
       if (providersData?.providers?.length) {
@@ -182,7 +191,7 @@ export function AgentCodeEditor({ open, onClose, onSuccess, agentId }: AgentCode
 
       setCode(JSON.stringify(defaultConfig, null, 2));
     }
-  }, [open, isEditing, agent, providersData]);
+  }, [open, isEditing, agent, providersData, agentTypesData]);
 
   // Reset state when dialog closes
   useEffect(() => {
@@ -209,8 +218,8 @@ export function AgentCodeEditor({ open, onClose, onSuccess, agentId }: AgentCode
         return;
       }
 
-      if (!parsed.agent_type || !['ReAct', 'Plan-and-Execute', 'Conversational', 'Custom'].includes(parsed.agent_type)) {
-        setValidationError('agent_type must be one of: ReAct, Plan-and-Execute, Conversational, Custom');
+      if (typeof parsed.agent_type_id !== 'number' || parsed.agent_type_id <= 0) {
+        setValidationError('agent_type_id is required and must be a positive number');
         return;
       }
 
@@ -316,7 +325,7 @@ export function AgentCodeEditor({ open, onClose, onSuccess, agentId }: AgentCode
         await updateAgent.mutateAsync({
           name: agentData.name,
           description: agentData.description,
-          agent_type: agentData.agent_type,
+          agent_type_id: agentData.agent_type_id,
           tags: agentData.tags,
           config: agentData.config,
         });
@@ -348,8 +357,19 @@ export function AgentCodeEditor({ open, onClose, onSuccess, agentId }: AgentCode
   const getHelpComment = () => {
     const providers = providersData?.providers || [];
     const tools = toolsData?.tools || [];
+    const agentTypes = agentTypesData?.agent_types || [];
 
-    let help = '// Available LLM Providers:\n';
+    let help = '// Available Agent Types:\n';
+    if (agentTypes.length === 0) {
+      help += '//   (No agent types available)\n';
+    } else {
+      agentTypes.forEach(at => {
+        const typeLabel = at.is_builtin ? 'Built-in' : (at.strategy_type === 'custom_code' ? 'Custom' : 'User');
+        help += `//   - agent_type_id: ${at.id} (${at.name} - ${typeLabel})\n`;
+      });
+    }
+
+    help += '//\n// Available LLM Providers:\n';
     if (providers.length === 0) {
       help += '//   (No providers configured - add one in Settings)\n';
     } else {
@@ -367,7 +387,6 @@ export function AgentCodeEditor({ open, onClose, onSuccess, agentId }: AgentCode
       });
     }
 
-    help += '//\n// Agent Types: ReAct, Plan-and-Execute, Conversational, Custom\n';
     help += '// --------------------------------------------------------\n\n';
 
     return help;

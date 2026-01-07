@@ -40,16 +40,15 @@ import {
   useUpdateAgent,
   useTools,
   useLLMProviders,
+  useAgentTypes,
   getErrorMessage,
 } from '@/api/hooks';
-import { AgentType, AgentCreateRequest } from '@/api/types';
-
-const AGENT_TYPES: AgentType[] = ['ReAct', 'Plan-and-Execute', 'Conversational', 'Custom'];
+import { AgentCreateRequest } from '@/api/types';
 
 const agentFormSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100, 'Name must be less than 100 characters'),
   description: z.string().max(500, 'Description must be less than 500 characters').optional(),
-  agent_type: z.enum(['ReAct', 'Plan-and-Execute', 'Conversational', 'Custom']),
+  agent_type_id: z.number().min(1, 'Agent type is required'),
   tags: z.array(z.string()).default([]),
   provider_id: z.number().nullable(),
   model: z.string().min(1, 'Model is required'),
@@ -78,16 +77,22 @@ export function AgentForm({ open, onClose, onSuccess, agentId }: AgentFormProps)
   const { data: agent, isLoading: isLoadingAgent } = useAgent(agentId ?? undefined);
   const { data: toolsData } = useTools({ pageSize: 100 });
   const { data: providersData } = useLLMProviders({ pageSize: 100 });
+  const { data: agentTypesData, isLoading: isLoadingAgentTypes } = useAgentTypes({ isActive: true });
 
   const createAgent = useCreateAgent();
   const updateAgent = useUpdateAgent(agentId ?? 0);
+
+  // Get default agent type (first ReAct builtin type)
+  const defaultAgentTypeId = agentTypesData?.agent_types.find(
+    at => at.execution_strategy === 'react' && at.is_builtin
+  )?.id ?? 0;
 
   const form = useForm<AgentFormData>({
     resolver: zodResolver(agentFormSchema),
     defaultValues: {
       name: '',
       description: '',
-      agent_type: 'ReAct',
+      agent_type_id: 0,
       tags: [],
       provider_id: null,
       model: 'gpt-4',
@@ -97,6 +102,13 @@ export function AgentForm({ open, onClose, onSuccess, agentId }: AgentFormProps)
       system_prompt: '',
     },
   });
+
+  // Set default agent type when creating new agent
+  useEffect(() => {
+    if (!isEditing && defaultAgentTypeId && form.getValues('agent_type_id') === 0) {
+      form.setValue('agent_type_id', defaultAgentTypeId);
+    }
+  }, [isEditing, defaultAgentTypeId, form]);
 
   // Load agent data when editing
   useEffect(() => {
@@ -108,7 +120,7 @@ export function AgentForm({ open, onClose, onSuccess, agentId }: AgentFormProps)
       form.reset({
         name: agent.name,
         description: agent.description || '',
-        agent_type: agent.agent_type,
+        agent_type_id: agent.agent_type_id,
         tags: agent.tags || [],
         provider_id: matchingProvider?.id ?? null,
         model: agent.current_version?.config.llm_config.model || 'gpt-4',
@@ -167,7 +179,7 @@ export function AgentForm({ open, onClose, onSuccess, agentId }: AgentFormProps)
     const payload: AgentCreateRequest = {
       name: data.name,
       description: data.description || undefined,
-      agent_type: data.agent_type,
+      agent_type_id: data.agent_type_id,
       tags: data.tags,
       config: {
         llm_config: {
@@ -188,7 +200,7 @@ export function AgentForm({ open, onClose, onSuccess, agentId }: AgentFormProps)
         await updateAgent.mutateAsync({
           name: payload.name,
           description: payload.description,
-          agent_type: payload.agent_type,
+          agent_type_id: payload.agent_type_id,
           tags: payload.tags,
           config: payload.config,
         });
@@ -268,33 +280,49 @@ export function AgentForm({ open, onClose, onSuccess, agentId }: AgentFormProps)
 
                     <FormField
                       control={form.control}
-                      name="agent_type"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Agent Type</FormLabel>
-                          <Select onValueChange={field.onChange} value={field.value}>
-                            <FormControl>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select agent type" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {AGENT_TYPES.map((type) => (
-                                <SelectItem key={type} value={type}>
-                                  {type}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <FormDescription>
-                            {field.value === 'ReAct' && 'Reasoning and acting in an interleaved manner'}
-                            {field.value === 'Plan-and-Execute' && 'Creates a plan first, then executes step by step'}
-                            {field.value === 'Conversational' && 'Optimized for multi-turn conversations'}
-                            {field.value === 'Custom' && 'Custom agent implementation'}
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
+                      name="agent_type_id"
+                      render={({ field }) => {
+                        const agentTypes = agentTypesData?.agent_types || [];
+                        const selectedType = agentTypes.find(at => at.id === field.value);
+                        return (
+                          <FormItem>
+                            <FormLabel>Agent Type</FormLabel>
+                            <Select
+                              onValueChange={(value) => field.onChange(parseInt(value))}
+                              value={field.value?.toString() || ''}
+                            >
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select agent type" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {isLoadingAgentTypes ? (
+                                  <SelectItem value="loading" disabled>
+                                    Loading agent types...
+                                  </SelectItem>
+                                ) : agentTypes.length === 0 ? (
+                                  <SelectItem value="none" disabled>
+                                    No agent types available
+                                  </SelectItem>
+                                ) : (
+                                  agentTypes.map((agentType) => (
+                                    <SelectItem key={agentType.id} value={agentType.id.toString()}>
+                                      {agentType.name}
+                                      {agentType.is_builtin && ' (Built-in)'}
+                                      {!agentType.is_builtin && agentType.strategy_type === 'custom_code' && ' (Custom)'}
+                                    </SelectItem>
+                                  ))
+                                )}
+                              </SelectContent>
+                            </Select>
+                            <FormDescription>
+                              {selectedType?.description || 'Select an agent type to see its description'}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        );
+                      }}
                     />
 
                     <FormField

@@ -515,7 +515,7 @@ export function PlaygroundPage() {
           {selectedAgent && (
             <CardDescription className="mt-2">
               {selectedAgent.description || 'No description'} -{' '}
-              <Badge variant="secondary">{selectedAgent.agent_type}</Badge>
+              <Badge variant="secondary">{selectedAgent.agent_type_config?.name || 'Unknown Type'}</Badge>
             </CardDescription>
           )}
         </CardHeader>

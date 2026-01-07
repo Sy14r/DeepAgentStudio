@@ -23,7 +23,8 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain.tools import BaseTool
 
 # Local imports
-from ..models.agent import Agent, AgentVersion, AgentType
+from ..models.agent import Agent, AgentVersion
+from ..models.agent_type import ExecutionStrategy
 from ..models.session import Session, SessionStatus, TraceStepType
 from .agent_executor import (
     AgentExecutorService,
@@ -175,7 +176,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
 
             # Execute with streaming callbacks
             result = await self._execute_agent_streaming(
-                agent_type=agent.agent_type,
+                execution_strategy=agent.agent_type_config.execution_strategy,
                 llm=llm,
                 tools=all_tools,
                 input_message=input_message,
@@ -323,7 +324,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
 
     async def _execute_agent_streaming(
         self,
-        agent_type: AgentType,
+        execution_strategy: ExecutionStrategy,
         llm,
         tools: List[BaseTool],
         input_message: str,
@@ -350,7 +351,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
             # Determine agent type based on model capabilities
             use_tool_calling = supports_tool_calling(model_name) and tools
 
-            if agent_type == AgentType.CONVERSATIONAL:
+            if execution_strategy == ExecutionStrategy.conversational:
                 # Conversational agent - no tools
                 return self._run_conversational(
                     llm, input_message, system_prompt, chat_history

@@ -24,14 +24,109 @@ export interface RegisterRequest {
 }
 
 // Agent types
+// Legacy type - kept for backward compatibility
 export type AgentType = 'ReAct' | 'Plan-and-Execute' | 'Conversational' | 'Custom';
+
+// Agent Type Config types (new entity)
+export type ExecutionStrategy = 'react' | 'plan_and_execute' | 'conversational';
+export type StrategyType = 'builtin' | 'custom_code';
+
+export interface DefaultLLMConfig {
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+}
+
+export interface DefaultMemoryConfig {
+  type?: string;
+  context_window?: number;
+  retrieval_strategy?: string;
+}
+
+export interface RecommendedToolInfo {
+  id: number;
+  name: string;
+  category: string;
+}
+
+export interface AgentTypeConfig {
+  id: number;
+  user_id: number | null;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  execution_strategy: ExecutionStrategy;
+  system_prompt_template: string | null;
+  default_llm_config: DefaultLLMConfig;
+  default_memory_config: DefaultMemoryConfig;
+  max_iterations: number;
+  strategy_type: StrategyType;
+  custom_strategy_code: string | null;
+  code_template_version: number;
+  is_builtin: boolean;
+  is_active: boolean;
+  recommended_tools: RecommendedToolInfo[];
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface AgentTypeConfigCreateRequest {
+  name: string;
+  description?: string;
+  icon?: string;
+  execution_strategy?: ExecutionStrategy;
+  system_prompt_template?: string;
+  default_llm_config?: DefaultLLMConfig;
+  default_memory_config?: DefaultMemoryConfig;
+  max_iterations?: number;
+  strategy_type?: StrategyType;
+  custom_strategy_code?: string;
+  code_template_version?: number;
+  recommended_tool_ids?: number[];
+}
+
+export interface AgentTypeConfigUpdateRequest {
+  name?: string;
+  description?: string;
+  icon?: string;
+  execution_strategy?: ExecutionStrategy;
+  system_prompt_template?: string;
+  default_llm_config?: DefaultLLMConfig;
+  default_memory_config?: DefaultMemoryConfig;
+  max_iterations?: number;
+  strategy_type?: StrategyType;
+  custom_strategy_code?: string;
+  code_template_version?: number;
+  recommended_tool_ids?: number[];
+  is_active?: boolean;
+}
+
+export interface AgentTypeConfigListResponse {
+  agent_types: AgentTypeConfig[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// Compact agent type config embedded in agent responses
+export interface AgentTypeConfigCompact {
+  id: number;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  execution_strategy: ExecutionStrategy;
+  strategy_type: StrategyType;
+  is_builtin: boolean;
+}
 
 export interface Agent {
   id: number;
   user_id: number;
   name: string;
   description: string | null;
-  agent_type: AgentType;
+  agent_type_id: number;
+  agent_type_config: AgentTypeConfigCompact | null;
   tags: string[];
   is_active: boolean;
   current_version_id: number | null;
@@ -86,7 +181,7 @@ export interface AgentDetail extends Agent {
 export interface AgentCreateRequest {
   name: string;
   description?: string;
-  agent_type: AgentType;
+  agent_type_id: number;
   tags?: string[];
   config: AgentConfig;
 }
@@ -94,7 +189,7 @@ export interface AgentCreateRequest {
 export interface AgentUpdateRequest {
   name?: string;
   description?: string;
-  agent_type?: AgentType;
+  agent_type_id?: number;
   tags?: string[];
   config?: AgentConfig;
 }
@@ -413,4 +508,46 @@ export interface MCPServerTestResponse {
   tools_count: number;
   latency_ms: number | null;
   tools?: MCPTool[];  // Optionally includes discovered tools
+}
+
+// Strategy Validation types
+export interface StrategyValidateRequest {
+  code: string;
+}
+
+export interface StrategyValidateResponse {
+  is_valid: boolean;
+  error: string | null;
+  warnings: string[];
+}
+
+export interface StrategyTestRequest {
+  code: string;
+  input_message?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface StrategyTestResponse {
+  success: boolean;
+  output: string | null;
+  error: string | null;
+  error_type: string | null;
+  execution_time_ms: number;
+  steps: Record<string, unknown>[];
+  tokens_input: number;
+  tokens_output: number;
+}
+
+export interface StrategyTemplateInfo {
+  name: string;
+  description: string;
+}
+
+export interface StrategyTemplatesResponse {
+  templates: StrategyTemplateInfo[];
+}
+
+export interface StrategyTemplateResponse {
+  name: string;
+  code: string;
 }

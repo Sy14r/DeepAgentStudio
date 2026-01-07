@@ -1,9 +1,12 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import Editor, { OnMount } from '@monaco-editor/react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import ReactMarkdown from 'react-markdown';
 import {
   Button,
+  Input,
   Textarea,
   Badge,
   Spinner,
@@ -11,6 +14,26 @@ import {
   AlertDescription,
   ScrollArea,
   Checkbox,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from '@/components/ui';
 import {
   Save,
@@ -19,18 +42,18 @@ import {
   Send,
   Bot,
   User,
-  Wrench,
-  Brain,
   AlertCircle,
-  CheckCircle,
-  Clock,
-  GitBranch,
   MessageSquare,
   RotateCcw,
-  Code,
-  Server,
+  Settings,
   ChevronDown,
   ChevronRight,
+  Info,
+  Eye,
+  Wifi,
+  WifiOff,
+  Square,
+  Wrench,
 } from 'lucide-react';
 import {
   useAgent,
@@ -42,43 +65,35 @@ import {
   useAgentMCPServers,
   useAssignAgentMCPServers,
   useInvokeAgent,
+  useAgentTypes,
+  useAgentWebSocket,
   getErrorMessage,
 } from '@/api/hooks';
-import { useUIStore } from '@/stores/uiStore';
+import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload } from '@/api/hooks/useAgentWebSocket';
 import { AgentCreateRequest, TraceStep } from '@/api/types';
-import { ModelParameterHelper } from '@/components/agents/ModelParameterHelper';
+import { SessionDetailDialog } from '@/components/sessions';
 
-// Default agent configuration template
-// This structure matches what the backend returns for saved agents
-const DEFAULT_AGENT_CONFIG: AgentCreateRequest = {
-  name: 'My Agent',
-  description: 'A helpful AI agent',
-  agent_type: 'ReAct',
-  tags: [],
-  config: {
-    llm_config: {
-      provider: 'openai',
-      provider_id: 0,
-      model: 'gpt-4',
-      temperature: 0.7,
-      max_tokens: 4096,
-      stop_sequences: [],
-    },
-    reflection_config: {
-      enabled: false,
-      depth: 2,
-      iteration_limit: 5,
-    },
-    memory_config: {
-      type: 'buffer',
-      context_window: 10,
-      retrieval_strategy: 'similarity',
-    },
-    tool_ids: [],
-    prompt_id: null,
-    system_prompt: 'You are a helpful AI assistant.',
-  },
-};
+// Form schema
+const agentFormSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(100, 'Name must be less than 100 characters'),
+  description: z.string().max(500, 'Description must be less than 500 characters').optional(),
+  agent_type_id: z.number().min(1, 'Agent type is required'),
+  tags: z.array(z.string()).default([]),
+  provider_id: z.number().nullable(),
+  model: z.string().min(1, 'Model is required'),
+  temperature: z.number().min(0).max(2).default(0.7),
+  max_tokens: z.number().min(1).max(128000).default(4096),
+  timeout_seconds: z.number().min(1).max(600).optional(),
+  reflection_enabled: z.boolean().default(false),
+  reflection_depth: z.number().min(1).max(10).default(2),
+  iteration_limit: z.number().min(1).max(20).default(5),
+  memory_type: z.string().default('buffer'),
+  context_window: z.number().min(1).max(100).default(10),
+  tool_ids: z.array(z.number()).default([]),
+  system_prompt: z.string().max(10000, 'System prompt must be less than 10000 characters').optional(),
+});
+
+type AgentFormData = z.infer<typeof agentFormSchema>;
 
 interface ChatMessage {
   id: string;
@@ -87,8 +102,41 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-interface TraceStepDisplay extends TraceStep {
-  timestamp?: Date;
+// Field descriptions for tooltips
+const FIELD_TOOLTIPS = {
+  name: "A unique, descriptive name for your agent. This will be displayed in the agent list and used to identify the agent.",
+  description: "A detailed description of what this agent does, its purpose, and any specific capabilities or limitations.",
+  agent_type: "The execution strategy that determines how the agent processes requests. ReAct agents use reasoning and tool-calling, while custom types can have user-defined behavior.",
+  tags: "Keywords or labels to help organize and filter agents. Useful for categorizing agents by purpose, domain, or project.",
+  provider: "The LLM service provider (e.g., OpenAI, Anthropic) that will power this agent. You must configure a provider in Settings first.",
+  model: "The specific model to use from your provider (e.g., gpt-4o, claude-3-opus). Different models have different capabilities and costs.",
+  temperature: "Controls response randomness. 0 = deterministic and focused, 2 = highly creative and varied. Recommended: 0.7 for balanced responses.",
+  max_tokens: "Maximum number of tokens the model can generate in a single response. Higher values allow longer responses but increase costs.",
+  timeout: "Maximum time (in seconds) the agent can run before being stopped. Prevents runaway executions and controls costs.",
+  reflection_enabled: "When enabled, the agent will review and potentially revise its responses for accuracy and quality.",
+  reflection_depth: "Number of levels of self-reflection the agent performs. Higher values may improve quality but increase latency.",
+  iteration_limit: "Maximum number of reflection cycles. Prevents infinite loops in the reflection process.",
+  memory_type: "How the agent stores conversation context. Buffer keeps recent messages, Summary compresses history, Vector uses semantic search.",
+  context_window: "Number of previous messages the agent can access. Larger windows provide more context but use more tokens.",
+  tools: "External capabilities the agent can use to accomplish tasks. Select tools that match the agent's intended purpose.",
+  mcp_servers: "Model Context Protocol servers that provide additional tools and capabilities to the agent.",
+  system_prompt: "Instructions that define the agent's personality, behavior, and constraints. This shapes how the agent responds to all requests.",
+};
+
+// Info icon with tooltip component
+function FieldInfo({ tooltip }: { tooltip: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className="ml-1 text-muted-foreground hover:text-foreground inline-flex">
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="max-w-xs text-xs">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
@@ -116,73 +164,37 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
-function TraceStepItem({ step }: { step: TraceStepDisplay }) {
-  const getStepIcon = () => {
-    switch (step.step_type) {
-      case 'thought':
-        return <Brain className="h-3 w-3 text-blue-500" />;
-      case 'tool_call':
-        return <Wrench className="h-3 w-3 text-orange-500" />;
-      case 'tool_result':
-        return <CheckCircle className="h-3 w-3 text-green-500" />;
-      case 'error':
-        return <AlertCircle className="h-3 w-3 text-red-500" />;
-      case 'final_answer':
-        return <CheckCircle className="h-3 w-3 text-green-600" />;
-      default:
-        return <Clock className="h-3 w-3 text-gray-500" />;
-    }
-  };
-
-  return (
-    <div className="text-xs border rounded p-2 bg-muted/30">
-      <div className="flex items-center gap-1 mb-1">
-        {getStepIcon()}
-        <span className="font-medium capitalize">
-          {step.step_type.replace('_', ' ')}
-        </span>
-        {step.tool_name && (
-          <Badge variant="outline" className="text-[10px] h-4">
-            {step.tool_name}
-          </Badge>
-        )}
-      </div>
-      {step.content && (
-        <p className="text-muted-foreground whitespace-pre-wrap line-clamp-3">
-          {step.content}
-        </p>
-      )}
-    </div>
-  );
-}
-
 export function AgentEditorPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { theme } = useUIStore();
 
   const isEditing = id !== undefined && id !== 'new';
   const agentId = isEditing ? parseInt(id) : null;
 
-  // Editor state
-  const [code, setCode] = useState('');
+  // Form state
+  const [activeTab, setActiveTab] = useState('basic');
+  const [tagInput, setTagInput] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [validationError, setValidationError] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const editorRef = useRef<any>(null);
+
+  // Advanced settings expanded state
+  const [executionExpanded, setExecutionExpanded] = useState(false);
+  const [reflectionExpanded, setReflectionExpanded] = useState(false);
+  const [memoryExpanded, setMemoryExpanded] = useState(false);
 
   // Chat state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [traceSteps, setTraceSteps] = useState<TraceStepDisplay[]>([]);
+  const [traceSteps, setTraceSteps] = useState<TraceStep[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
-
-  // MCP server panel state
-  const [mcpExpanded, setMcpExpanded] = useState(false);
+  const [sessionDetailOpen, setSessionDetailOpen] = useState(false);
+  const [streamingEnabled, setStreamingEnabled] = useState(true);
+  const [pendingAssistantMessage, setPendingAssistantMessage] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Data hooks
   const { data: agent, isLoading: isLoadingAgent } = useAgent(agentId ?? undefined);
@@ -190,63 +202,186 @@ export function AgentEditorPage() {
   const { data: toolsData } = useTools({ pageSize: 100 });
   const { data: mcpServersData } = useMCPServers({ pageSize: 100 });
   const { data: agentMCPServers } = useAgentMCPServers(agentId ?? undefined);
+  const { data: agentTypesData } = useAgentTypes({ isActive: true });
 
   const createAgent = useCreateAgent();
   const updateAgent = useUpdateAgent(agentId ?? 0);
   const invokeAgent = useInvokeAgent(agentId ?? 0);
   const assignMCPServers = useAssignAgentMCPServers(agentId ?? 0);
 
+  // WebSocket streaming callbacks
+  const handleToolCall = (payload: ToolCallPayload, wsSessionId: number) => {
+    setSessionId(wsSessionId);
+    setPendingAssistantMessage(`Using tool: ${payload.tool_name}...`);
+    const step: TraceStep = {
+      id: Date.now(),
+      session_id: wsSessionId,
+      step_number: payload.step_number,
+      step_type: 'tool_call',
+      tool_name: payload.tool_name,
+      tool_input: payload.tool_input,
+      content: `Calling ${payload.tool_name}`,
+      created_at: new Date().toISOString(),
+    };
+    setTraceSteps((prev) => [...prev, step]);
+  };
+
+  const handleToolResult = (payload: ToolResultPayload, wsSessionId: number) => {
+    setPendingAssistantMessage('Processing results...');
+    const step: TraceStep = {
+      id: Date.now(),
+      session_id: wsSessionId,
+      step_number: payload.step_number,
+      step_type: 'tool_result',
+      tool_name: payload.tool_name,
+      tool_output: payload.tool_output,
+      latency_ms: payload.latency_ms,
+      content: `Result from ${payload.tool_name}`,
+      created_at: new Date().toISOString(),
+    };
+    setTraceSteps((prev) => [...prev, step]);
+  };
+
+  const handleFinalAnswer = (payload: FinalAnswerPayload, wsSessionId: number) => {
+    const assistantMessage: ChatMessage = {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      content: payload.output,
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+    setPendingAssistantMessage('');
+  };
+
+  const handleStreamError = (payload: ErrorPayload) => {
+    setChatError(payload.error);
+    setPendingAssistantMessage('');
+  };
+
+  const handleSessionStart = (_payload: unknown, wsSessionId: number) => {
+    setSessionId(wsSessionId);
+    setPendingAssistantMessage('Thinking...');
+  };
+
+  // WebSocket hook for streaming
+  const {
+    isConnected,
+    isExecuting,
+    connect: wsConnect,
+    disconnect: wsDisconnect,
+    invoke: wsInvoke,
+  } = useAgentWebSocket({
+    agentId: agentId ?? 0,
+    onSessionStart: handleSessionStart,
+    onToolCall: handleToolCall,
+    onToolResult: handleToolResult,
+    onFinalAnswer: handleFinalAnswer,
+    onError: handleStreamError,
+    autoReconnect: true,
+  });
+
+  // Auto-connect WebSocket when streaming is enabled and agent is saved
+  useEffect(() => {
+    if (streamingEnabled && isEditing && agentId) {
+      wsConnect();
+    } else {
+      wsDisconnect();
+    }
+    return () => {
+      wsDisconnect();
+    };
+  }, [streamingEnabled, isEditing, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const providers = providersData?.providers || [];
   const tools = toolsData?.tools || [];
   const mcpServers = mcpServersData?.servers || [];
+  const agentTypes = agentTypesData?.agent_types || [];
 
-  // Determine Monaco theme
-  const getMonacoTheme = () => {
-    if (theme === 'system') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'deepagent-dark'
-        : 'deepagent-light';
-    }
-    return theme === 'dark' ? 'deepagent-dark' : 'deepagent-light';
-  };
+  // Get default agent type (first ReAct builtin type)
+  const defaultAgentTypeId = agentTypes.find(
+    at => at.execution_strategy === 'react' && at.is_builtin
+  )?.id ?? agentTypes[0]?.id ?? 0;
 
-  // Initialize editor with agent data or default template
+  // Get default provider
+  const defaultProviderId = providers[0]?.id ?? null;
+
+  const form = useForm<AgentFormData>({
+    resolver: zodResolver(agentFormSchema),
+    defaultValues: {
+      name: 'My Agent',
+      description: '',
+      agent_type_id: 0,
+      tags: [],
+      provider_id: null,
+      model: 'gpt-4',
+      temperature: 0.7,
+      max_tokens: 4096,
+      timeout_seconds: 120,
+      reflection_enabled: false,
+      reflection_depth: 2,
+      iteration_limit: 5,
+      memory_type: 'buffer',
+      context_window: 10,
+      tool_ids: [],
+      system_prompt: 'You are a helpful AI assistant.',
+    },
+  });
+
+  // Set defaults when data loads
   useEffect(() => {
-    if (isEditing && agent) {
-      const agentConfig: AgentCreateRequest = {
+    if (!isEditing && defaultAgentTypeId && form.getValues('agent_type_id') === 0) {
+      form.setValue('agent_type_id', defaultAgentTypeId);
+    }
+    if (!isEditing && defaultProviderId && form.getValues('provider_id') === null) {
+      form.setValue('provider_id', defaultProviderId);
+    }
+  }, [isEditing, defaultAgentTypeId, defaultProviderId, form]);
+
+  // Load agent data when editing
+  useEffect(() => {
+    if (agent && isEditing && providersData) {
+      const providerType = agent.current_version?.config.llm_config.provider;
+      const matchingProvider = providersData.providers.find(p => p.provider_type === providerType);
+      const config = agent.current_version?.config;
+
+      form.reset({
         name: agent.name,
-        description: agent.description || undefined,
-        agent_type: agent.agent_type,
+        description: agent.description || '',
+        agent_type_id: agent.agent_type_id,
         tags: agent.tags || [],
-        config: agent.current_version?.config || DEFAULT_AGENT_CONFIG.config,
-      };
-      setCode(JSON.stringify(agentConfig, null, 2));
-      setHasUnsavedChanges(false);
-    } else if (!isEditing) {
-      const defaultConfig = { ...DEFAULT_AGENT_CONFIG };
-      if (providers.length > 0) {
-        const firstProvider = providers[0];
-        defaultConfig.config.llm_config.provider_id = firstProvider.id;
-        defaultConfig.config.llm_config.provider = firstProvider.provider_type;
-      }
-      setCode(JSON.stringify(defaultConfig, null, 2));
+        provider_id: matchingProvider?.id ?? null,
+        model: config?.llm_config.model || 'gpt-4',
+        temperature: config?.llm_config.temperature ?? 0.7,
+        max_tokens: config?.llm_config.max_tokens ?? 4096,
+        timeout_seconds: config?.timeout_seconds ?? 120,
+        reflection_enabled: config?.reflection_config?.enabled ?? false,
+        reflection_depth: config?.reflection_config?.depth ?? 2,
+        iteration_limit: config?.reflection_config?.iteration_limit ?? 5,
+        memory_type: config?.memory_config?.type ?? 'buffer',
+        context_window: config?.memory_config?.context_window ?? 10,
+        tool_ids: config?.tool_ids || [],
+        system_prompt: config?.system_prompt || '',
+      });
       setHasUnsavedChanges(false);
     }
-  }, [isEditing, agent, providers]);
+  }, [agent, isEditing, form, providersData]);
 
   // Track unsaved changes
   useEffect(() => {
-    if (code && !isLoadingAgent) {
-      setHasUnsavedChanges(true);
-    }
-  }, [code]);
+    const subscription = form.watch(() => {
+      if (!isLoadingAgent) {
+        setHasUnsavedChanges(true);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [form, isLoadingAgent]);
 
   // Scroll chat to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Auto-resize textarea as content changes
+  // Auto-resize textarea
   useEffect(() => {
     const textarea = inputRef.current;
     if (textarea) {
@@ -255,143 +390,81 @@ export function AgentEditorPage() {
     }
   }, [inputValue]);
 
-  // Validate JSON on code change
-  useEffect(() => {
-    if (!code) {
-      setValidationError(null);
-      return;
+  const handleAddTag = () => {
+    const tag = tagInput.trim();
+    if (tag && !form.getValues('tags').includes(tag)) {
+      form.setValue('tags', [...form.getValues('tags'), tag]);
+      setTagInput('');
     }
-
-    try {
-      const parsed = JSON.parse(code);
-
-      if (!parsed.name || typeof parsed.name !== 'string') {
-        setValidationError('name is required and must be a string');
-        return;
-      }
-
-      if (
-        !parsed.agent_type ||
-        !['ReAct', 'Plan-and-Execute', 'Conversational', 'Custom'].includes(parsed.agent_type)
-      ) {
-        setValidationError('agent_type must be one of: ReAct, Plan-and-Execute, Conversational, Custom');
-        return;
-      }
-
-      if (!parsed.config || !parsed.config.llm_config) {
-        setValidationError('config.llm_config is required');
-        return;
-      }
-
-      if (!parsed.config.llm_config.model) {
-        setValidationError('config.llm_config.model is required');
-        return;
-      }
-
-      if (typeof parsed.config.llm_config.provider_id !== 'number') {
-        setValidationError('config.llm_config.provider_id must be a number');
-        return;
-      }
-
-      setValidationError(null);
-    } catch (e) {
-      if (e instanceof SyntaxError) {
-        setValidationError(`JSON syntax error: ${e.message}`);
-      } else {
-        setValidationError('Invalid JSON');
-      }
-    }
-  }, [code]);
-
-  const handleEditorMount: OnMount = (editor, monaco) => {
-    editorRef.current = editor;
-
-    // Define custom themes
-    monaco.editor.defineTheme('deepagent-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [
-        { token: 'string.key.json', foreground: '9CDCFE' },
-        { token: 'string.value.json', foreground: 'CE9178' },
-        { token: 'number', foreground: 'B5CEA8' },
-        { token: 'keyword', foreground: '569CD6' },
-      ],
-      colors: {
-        'editor.background': '#0f0f17',
-        'editor.foreground': '#e4e4e7',
-        'editor.lineHighlightBackground': '#1a1a2e',
-        'editor.selectionBackground': '#3d3d5c',
-        'editorCursor.foreground': '#60a5fa',
-        'editorLineNumber.foreground': '#6b7280',
-        'editorLineNumber.activeForeground': '#e4e4e7',
-        'editor.inactiveSelectionBackground': '#2d2d44',
-      },
-    });
-
-    monaco.editor.defineTheme('deepagent-light', {
-      base: 'vs',
-      inherit: true,
-      rules: [
-        { token: 'string.key.json', foreground: '0451A5' },
-        { token: 'string.value.json', foreground: 'A31515' },
-        { token: 'number', foreground: '098658' },
-        { token: 'keyword', foreground: '0000FF' },
-      ],
-      colors: {
-        'editor.background': '#fafafa',
-        'editor.foreground': '#1f2937',
-        'editor.lineHighlightBackground': '#f3f4f6',
-        'editor.selectionBackground': '#add6ff',
-        'editorCursor.foreground': '#2563eb',
-        'editorLineNumber.foreground': '#9ca3af',
-        'editorLineNumber.activeForeground': '#1f2937',
-        'editor.inactiveSelectionBackground': '#e5ebf1',
-      },
-    });
-
-    monaco.editor.setTheme(getMonacoTheme());
   };
 
-  const handleSave = async () => {
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
+  const handleRemoveTag = (tagToRemove: string) => {
+    form.setValue(
+      'tags',
+      form.getValues('tags').filter((tag) => tag !== tagToRemove)
+    );
+  };
 
+  const handleToolToggle = (toolId: number) => {
+    const currentTools = form.getValues('tool_ids');
+    if (currentTools.includes(toolId)) {
+      form.setValue('tool_ids', currentTools.filter((id) => id !== toolId));
+    } else {
+      form.setValue('tool_ids', [...currentTools, toolId]);
+    }
+  };
+
+  const onSubmit = async (data: AgentFormData) => {
     setError(null);
 
-    try {
-      const agentData: AgentCreateRequest = JSON.parse(code);
+    const selectedProvider = providers.find(p => p.id === data.provider_id);
+    const providerType = selectedProvider?.provider_type || 'openai';
 
+    const payload: AgentCreateRequest = {
+      name: data.name,
+      description: data.description || undefined,
+      agent_type_id: data.agent_type_id,
+      tags: data.tags,
+      config: {
+        llm_config: {
+          provider: providerType,
+          provider_id: data.provider_id || 0,
+          model: data.model,
+          temperature: data.temperature,
+          max_tokens: data.max_tokens,
+        },
+        tool_ids: data.tool_ids,
+        prompt_id: null,
+        system_prompt: data.system_prompt || null,
+        timeout_seconds: data.timeout_seconds,
+        reflection_config: {
+          enabled: data.reflection_enabled,
+          depth: data.reflection_depth,
+          iteration_limit: data.iteration_limit,
+        },
+        memory_config: {
+          type: data.memory_type,
+          context_window: data.context_window,
+        },
+      },
+    };
+
+    try {
       if (isEditing && agentId) {
         await updateAgent.mutateAsync({
-          name: agentData.name,
-          description: agentData.description,
-          agent_type: agentData.agent_type,
-          tags: agentData.tags,
-          config: agentData.config,
+          name: payload.name,
+          description: payload.description,
+          agent_type_id: payload.agent_type_id,
+          tags: payload.tags,
+          config: payload.config,
         });
       } else {
-        const created = await createAgent.mutateAsync(agentData);
-        // Navigate to edit page for newly created agent
+        const created = await createAgent.mutateAsync(payload);
         navigate(`/agents/${created.id}/edit`, { replace: true });
       }
       setHasUnsavedChanges(false);
     } catch (err) {
-      if (err instanceof SyntaxError) {
-        setError(`Invalid JSON: ${err.message}`);
-      } else {
-        setError(getErrorMessage(err));
-      }
-    }
-  };
-
-  const handleFormatCode = () => {
-    try {
-      const parsed = JSON.parse(code);
-      setCode(JSON.stringify(parsed, null, 2));
-    } catch {
-      // Can't format invalid JSON
+      setError(getErrorMessage(err));
     }
   };
 
@@ -414,7 +487,15 @@ export function AgentEditorPage() {
     setInputValue('');
     setChatError(null);
 
+    // Use WebSocket streaming if enabled and connected
+    if (streamingEnabled && isConnected) {
+      wsInvoke(userMessage.content, sessionId || undefined);
+      return;
+    }
+
+    // Fallback to REST API
     try {
+      abortControllerRef.current = new AbortController();
       const response = await invokeAgent.mutateAsync({
         message: userMessage.content,
         session_id: sessionId || undefined,
@@ -446,7 +527,34 @@ export function AgentEditorPage() {
         ]);
       }
     } catch (err) {
-      setChatError(getErrorMessage(err));
+      if ((err as Error).name !== 'AbortError') {
+        setChatError(getErrorMessage(err));
+      }
+    } finally {
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleStopExecution = () => {
+    // Stop WebSocket streaming
+    if (streamingEnabled && isExecuting) {
+      wsDisconnect();
+      // Reconnect after a brief delay
+      setTimeout(() => {
+        if (streamingEnabled && isEditing && agentId) {
+          wsConnect();
+        }
+      }, 500);
+      setPendingAssistantMessage('');
+      setChatError('Execution stopped by user');
+      return;
+    }
+
+    // Abort REST request (limited effectiveness - server continues)
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setChatError('Request cancelled (server may continue processing)');
     }
   };
 
@@ -462,74 +570,8 @@ export function AgentEditorPage() {
     setTraceSteps([]);
     setSessionId(null);
     setChatError(null);
+    setPendingAssistantMessage('');
     inputRef.current?.focus();
-  };
-
-  // Build helpful comment header
-  const getHelpText = () => {
-    let help = 'Available LLM Providers:\n';
-    if (providers.length === 0) {
-      help += '  (No providers configured - add one in Settings)\n';
-    } else {
-      providers.forEach((p) => {
-        help += `  - provider_id: ${p.id} → ${p.name} (${p.provider_type})\n`;
-      });
-    }
-
-    help += '\nAvailable Tools:\n';
-    if (tools.length === 0) {
-      help += '  (No tools available)\n';
-    } else {
-      tools.forEach((t) => {
-        help += `  - tool_id: ${t.id} → ${t.name}\n`;
-      });
-    }
-
-    help += '\nMCP Servers (assign via API or checkbox below):\n';
-    if (mcpServers.length === 0) {
-      help += '  (No MCP servers - add in Settings)\n';
-    } else {
-      mcpServers.forEach((s) => {
-        const assigned = agentMCPServers?.some((a) => a.id === s.id) ? ' [assigned]' : '';
-        help += `  - ${s.name} (${s.transport_type})${assigned}\n`;
-      });
-    }
-
-    help += '\nAgent Types: ReAct, Plan-and-Execute, Conversational, Custom';
-
-    return help;
-  };
-
-  // Parse current llm_config from JSON code
-  const currentLLMConfig = useMemo(() => {
-    try {
-      const parsed = JSON.parse(code);
-      return parsed?.config?.llm_config || {};
-    } catch {
-      return {};
-    }
-  }, [code]);
-
-  // Handle applying config updates from the helper panel
-  const handleApplyConfig = (updates: Record<string, unknown>) => {
-    try {
-      const parsed = JSON.parse(code);
-      if (!parsed.config) {
-        parsed.config = {};
-      }
-      if (!parsed.config.llm_config) {
-        parsed.config.llm_config = {};
-      }
-      // Merge updates into llm_config
-      parsed.config.llm_config = {
-        ...parsed.config.llm_config,
-        ...updates,
-      };
-      setCode(JSON.stringify(parsed, null, 2));
-    } catch {
-      // If JSON is invalid, can't apply updates
-      console.error('Cannot apply config updates to invalid JSON');
-    }
   };
 
   // Handle MCP server toggle
@@ -553,15 +595,8 @@ export function AgentEditorPage() {
   };
 
   const isPending = createAgent.isPending || updateAgent.isPending;
-
-  // Parse current agent name from code for display
-  let currentAgentName = 'New Agent';
-  try {
-    const parsed = JSON.parse(code);
-    if (parsed.name) currentAgentName = parsed.name;
-  } catch {
-    // ignore
-  }
+  const isChatBusy = isExecuting || invokeAgent.isPending;
+  const currentAgentName = form.watch('name') || 'New Agent';
 
   if (isLoadingAgent && isEditing) {
     return (
@@ -576,7 +611,7 @@ export function AgentEditorPage() {
       {/* Header */}
       <div className="flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <Code className="h-6 w-6 text-primary" />
+          <Settings className="h-6 w-6 text-primary" />
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
               {currentAgentName}
@@ -596,7 +631,7 @@ export function AgentEditorPage() {
             <X className="mr-2 h-4 w-4" />
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isPending || !!validationError}>
+          <Button onClick={form.handleSubmit(onSubmit)} disabled={isPending}>
             {isPending ? (
               <Spinner className="mr-2 h-4 w-4" />
             ) : (
@@ -608,162 +643,625 @@ export function AgentEditorPage() {
       </div>
 
       {/* Error alerts */}
-      {(error || validationError) && (
+      {error && (
         <Alert variant="destructive" className="shrink-0">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error || validationError}</AlertDescription>
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
       {/* Main content - split view */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0">
-        {/* Left side - Code Editor */}
+        {/* Left side - Form */}
         <div className="flex flex-col min-h-0 border rounded-lg overflow-hidden">
-          {/* Editor header */}
-          <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30 shrink-0">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Code className="h-4 w-4" />
-              Configuration
-            </div>
-            <Button variant="ghost" size="sm" onClick={handleFormatCode}>
-              Format
-            </Button>
-          </div>
+          <TooltipProvider delayDuration={300}>
+            <Form {...form}>
+              <form className="flex flex-col flex-1 overflow-hidden">
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
+                <TabsList className="grid w-full grid-cols-3 mx-4 mt-4 mb-2" style={{ width: 'calc(100% - 2rem)' }}>
+                  <TabsTrigger value="basic">Basic Info</TabsTrigger>
+                  <TabsTrigger value="config">Configuration</TabsTrigger>
+                  <TabsTrigger value="tools">Tools & Prompts</TabsTrigger>
+                </TabsList>
 
-          {/* Help text */}
-          <div className="px-4 py-2 border-b bg-muted/20 text-xs font-mono text-muted-foreground whitespace-pre overflow-x-auto shrink-0">
-            {getHelpText()}
-          </div>
+                <ScrollArea className="flex-1 px-4">
+                  {/* Basic Info Tab */}
+                  <TabsContent value="basic" className="space-y-4 mt-2 pb-4">
+                    <FormField
+                      control={form.control}
+                      name="name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            Name
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.name} />
+                          </FormLabel>
+                          <FormControl>
+                            <Input placeholder="My Agent" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-          {/* Monaco Editor */}
-          <div className="flex-1 min-h-0">
-            <Editor
-              height="100%"
-              defaultLanguage="json"
-              value={code}
-              onChange={(value) => setCode(value || '')}
-              onMount={handleEditorMount}
-              theme={getMonacoTheme()}
-              options={{
-                minimap: { enabled: false },
-                fontSize: 13,
-                fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-                lineNumbers: 'on',
-                scrollBeyondLastLine: false,
-                wordWrap: 'on',
-                automaticLayout: true,
-                tabSize: 2,
-                folding: true,
-                bracketPairColorization: { enabled: true },
-                guides: {
-                  bracketPairs: true,
-                  indentation: true,
-                },
-              }}
-            />
-          </div>
+                    <FormField
+                      control={form.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            Description
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.description} />
+                          </FormLabel>
+                          <FormControl>
+                            <Textarea
+                              placeholder="Describe what this agent does..."
+                              className="resize-none"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="agent_type_id"
+                      render={({ field }) => {
+                        const selectedType = agentTypes.find(at => at.id === field.value);
+                        return (
+                          <FormItem>
+                            <FormLabel className="flex items-center">
+                              Agent Type
+                              <FieldInfo tooltip={FIELD_TOOLTIPS.agent_type} />
+                            </FormLabel>
+                            <Select
+                              onValueChange={(value) => field.onChange(parseInt(value))}
+                              value={field.value?.toString() || ''}
+                            >
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select agent type" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {agentTypes.map((agentType) => (
+                                  <SelectItem key={agentType.id} value={agentType.id.toString()}>
+                                    {agentType.name}
+                                    {agentType.is_builtin && ' (Built-in)'}
+                                    {!agentType.is_builtin && agentType.strategy_type === 'custom_code' && ' (Custom)'}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormDescription>
+                              {selectedType?.description || 'Select an agent type'}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        );
+                      }}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="tags"
+                      render={() => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            Tags
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.tags} />
+                          </FormLabel>
+                          <div className="flex gap-2">
+                            <Input
+                              placeholder="Add a tag..."
+                              value={tagInput}
+                              onChange={(e) => setTagInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleAddTag();
+                                }
+                              }}
+                            />
+                            <Button type="button" variant="secondary" onClick={handleAddTag}>
+                              Add
+                            </Button>
+                          </div>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {form.watch('tags').map((tag) => (
+                              <Badge key={tag} variant="secondary" className="gap-1">
+                                {tag}
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveTag(tag)}
+                                  className="ml-1 hover:text-destructive"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </TabsContent>
+
+                  {/* Configuration Tab */}
+                  <TabsContent value="config" className="space-y-4 mt-2 pb-4">
+                    <FormField
+                      control={form.control}
+                      name="provider_id"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            LLM Provider
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.provider} />
+                          </FormLabel>
+                          <Select
+                            onValueChange={(value) => field.onChange(value ? parseInt(value) : null)}
+                            value={field.value?.toString() || ''}
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select a provider" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {providers.length === 0 ? (
+                                <SelectItem value="none" disabled>
+                                  No providers configured
+                                </SelectItem>
+                              ) : (
+                                providers.map((provider) => (
+                                  <SelectItem key={provider.id} value={provider.id.toString()}>
+                                    {provider.name} ({provider.provider_type})
+                                  </SelectItem>
+                                ))
+                              )}
+                            </SelectContent>
+                          </Select>
+                          {providers.length === 0 && (
+                            <FormDescription className="text-yellow-600">
+                              Configure an LLM provider in Settings first
+                            </FormDescription>
+                          )}
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="model"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            Model
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.model} />
+                          </FormLabel>
+                          <FormControl>
+                            <Input placeholder="gpt-4" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="temperature"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            Temperature: {field.value}
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.temperature} />
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="range"
+                              min="0"
+                              max="2"
+                              step="0.1"
+                              {...field}
+                              onChange={(e) => field.onChange(parseFloat(e.target.value))}
+                              className="cursor-pointer"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="max_tokens"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            Max Tokens
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.max_tokens} />
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="1"
+                              max="128000"
+                              {...field}
+                              onChange={(e) => field.onChange(parseInt(e.target.value) || 4096)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    {/* Execution Settings */}
+                    <div className="border rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setExecutionExpanded(!executionExpanded)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium hover:bg-muted/50"
+                      >
+                        <span>Execution Settings</span>
+                        {executionExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                      {executionExpanded && (
+                        <div className="px-3 pb-3 space-y-3">
+                          <FormField
+                            control={form.control}
+                            name="timeout_seconds"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel className="flex items-center">
+                                  Timeout (seconds)
+                                  <FieldInfo tooltip={FIELD_TOOLTIPS.timeout} />
+                                </FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    min="1"
+                                    max="600"
+                                    {...field}
+                                    value={field.value || ''}
+                                    onChange={(e) => field.onChange(parseInt(e.target.value) || undefined)}
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Reflection Settings */}
+                    <div className="border rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setReflectionExpanded(!reflectionExpanded)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium hover:bg-muted/50"
+                      >
+                        <span>Reflection Settings</span>
+                        {reflectionExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                      {reflectionExpanded && (
+                        <div className="px-3 pb-3 space-y-3">
+                          <FormField
+                            control={form.control}
+                            name="reflection_enabled"
+                            render={({ field }) => (
+                              <FormItem className="flex flex-row items-center gap-2">
+                                <FormControl>
+                                  <Checkbox
+                                    checked={field.value}
+                                    onCheckedChange={field.onChange}
+                                  />
+                                </FormControl>
+                                <FormLabel className="!mt-0 flex items-center">
+                                  Enable Reflection
+                                  <FieldInfo tooltip={FIELD_TOOLTIPS.reflection_enabled} />
+                                </FormLabel>
+                              </FormItem>
+                            )}
+                          />
+
+                          {form.watch('reflection_enabled') && (
+                            <>
+                              <FormField
+                                control={form.control}
+                                name="reflection_depth"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel className="flex items-center">
+                                      Reflection Depth
+                                      <FieldInfo tooltip={FIELD_TOOLTIPS.reflection_depth} />
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="number"
+                                        min="1"
+                                        max="10"
+                                        {...field}
+                                        onChange={(e) => field.onChange(parseInt(e.target.value) || 2)}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name="iteration_limit"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel className="flex items-center">
+                                      Iteration Limit
+                                      <FieldInfo tooltip={FIELD_TOOLTIPS.iteration_limit} />
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="number"
+                                        min="1"
+                                        max="20"
+                                        {...field}
+                                        onChange={(e) => field.onChange(parseInt(e.target.value) || 5)}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Memory Settings */}
+                    <div className="border rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setMemoryExpanded(!memoryExpanded)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium hover:bg-muted/50"
+                      >
+                        <span>Memory Settings</span>
+                        {memoryExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                      {memoryExpanded && (
+                        <div className="px-3 pb-3 space-y-3">
+                          <FormField
+                            control={form.control}
+                            name="memory_type"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel className="flex items-center">
+                                  Memory Type
+                                  <FieldInfo tooltip={FIELD_TOOLTIPS.memory_type} />
+                                </FormLabel>
+                                <Select onValueChange={field.onChange} value={field.value}>
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Select memory type" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="buffer">Buffer</SelectItem>
+                                    <SelectItem value="summary">Summary</SelectItem>
+                                    <SelectItem value="vector">Vector</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+
+                          <FormField
+                            control={form.control}
+                            name="context_window"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel className="flex items-center">
+                                  Context Window
+                                  <FieldInfo tooltip={FIELD_TOOLTIPS.context_window} />
+                                </FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    min="1"
+                                    max="100"
+                                    {...field}
+                                    onChange={(e) => field.onChange(parseInt(e.target.value) || 10)}
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </TabsContent>
+
+                  {/* Tools & Prompts Tab */}
+                  <TabsContent value="tools" className="space-y-4 mt-2 pb-4">
+                    <FormField
+                      control={form.control}
+                      name="tool_ids"
+                      render={() => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            Tools
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.tools} />
+                          </FormLabel>
+                          <div className="border rounded-md p-4 space-y-2 max-h-48 overflow-y-auto">
+                            {tools.length === 0 ? (
+                              <p className="text-sm text-muted-foreground">
+                                No tools available. Create tools first.
+                              </p>
+                            ) : (
+                              tools.map((tool) => (
+                                <div key={tool.id} className="flex items-center space-x-2">
+                                  <Checkbox
+                                    id={`tool-${tool.id}`}
+                                    checked={form.watch('tool_ids').includes(tool.id)}
+                                    onCheckedChange={() => handleToolToggle(tool.id)}
+                                  />
+                                  <label
+                                    htmlFor={`tool-${tool.id}`}
+                                    className="flex-1 text-sm cursor-pointer"
+                                  >
+                                    <span className="font-medium">{tool.name}</span>
+                                    <span className="text-muted-foreground ml-2">
+                                      ({tool.category})
+                                    </span>
+                                  </label>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    {/* MCP Servers */}
+                    {mcpServers.length > 0 && isEditing && agentId && (
+                      <div>
+                        <FormLabel className="flex items-center">
+                          MCP Servers
+                          <FieldInfo tooltip={FIELD_TOOLTIPS.mcp_servers} />
+                        </FormLabel>
+                        <div className="border rounded-md p-4 space-y-2 max-h-48 overflow-y-auto">
+                          {mcpServers.map((server) => {
+                            const isAssigned = agentMCPServers?.some((s) => s.id === server.id);
+                            return (
+                              <div key={server.id} className="flex items-center space-x-2">
+                                <Checkbox
+                                  id={`mcp-${server.id}`}
+                                  checked={isAssigned}
+                                  onCheckedChange={(checked) =>
+                                    handleMCPServerToggle(server.id, checked === true)
+                                  }
+                                  disabled={assignMCPServers.isPending}
+                                />
+                                <label
+                                  htmlFor={`mcp-${server.id}`}
+                                  className="flex-1 text-sm cursor-pointer"
+                                >
+                                  <span className="font-medium">{server.name}</span>
+                                  <Badge variant="outline" className="ml-2 text-xs">
+                                    {server.transport_type}
+                                  </Badge>
+                                  {server.cached_tools_count > 0 && (
+                                    <span className="text-muted-foreground ml-2">
+                                      ({server.cached_tools_count} tools)
+                                    </span>
+                                  )}
+                                </label>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <FormField
+                      control={form.control}
+                      name="system_prompt"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="flex items-center">
+                            System Prompt
+                            <FieldInfo tooltip={FIELD_TOOLTIPS.system_prompt} />
+                          </FormLabel>
+                          <FormControl>
+                            <Textarea
+                              placeholder="You are a helpful assistant..."
+                              className="resize-none min-h-[150px]"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </TabsContent>
+                </ScrollArea>
+              </Tabs>
+              </form>
+            </Form>
+          </TooltipProvider>
         </div>
 
-        {/* Right side - Model Settings + Test Chat */}
-        <div className="flex flex-col min-h-0 gap-4">
-          {/* Model Parameter Helper - collapsible */}
-          <div className="shrink-0">
-            <ModelParameterHelper
-              providers={providers}
-              currentConfig={currentLLMConfig}
-              onApply={handleApplyConfig}
-              defaultExpanded={true}
-            />
-          </div>
-
-          {/* MCP Servers Panel - collapsible */}
-          {mcpServers.length > 0 && isEditing && agentId && (
-            <div className="shrink-0 border rounded-lg">
-              <button
-                onClick={() => setMcpExpanded(!mcpExpanded)}
-                className="w-full flex items-center justify-between px-4 py-2 text-sm font-medium hover:bg-muted/50"
-              >
-                <div className="flex items-center gap-2">
-                  <Server className="h-4 w-4" />
-                  MCP Servers
-                  {agentMCPServers && agentMCPServers.length > 0 && (
-                    <Badge variant="outline" className="text-xs">
-                      {agentMCPServers.length} assigned
-                    </Badge>
+        {/* Right side - Test Chat */}
+        <div className="flex flex-col min-h-0 border rounded-lg overflow-hidden">
+          {/* Chat header */}
+          <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30 shrink-0">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Play className="h-4 w-4" />
+              Test Chat
+              {sessionId && (
+                <Badge variant="outline" className="text-xs">
+                  Session #{sessionId}
+                </Badge>
+              )}
+              {/* Streaming status */}
+              {streamingEnabled && isEditing && (
+                <Badge
+                  variant={isConnected ? 'default' : 'secondary'}
+                  className={`text-xs ${isConnected ? 'bg-green-600' : ''}`}
+                >
+                  {isConnected ? (
+                    <><Wifi className="h-3 w-3 mr-1" /> Live</>
+                  ) : (
+                    <><WifiOff className="h-3 w-3 mr-1" /> Offline</>
                   )}
-                </div>
-                {mcpExpanded ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronRight className="h-4 w-4" />
-                )}
-              </button>
-              {mcpExpanded && (
-                <div className="px-4 pb-3 space-y-2">
-                  <p className="text-xs text-muted-foreground mb-2">
-                    Select MCP servers to provide additional tools for this agent:
-                  </p>
-                  {mcpServers.map((server) => {
-                    const isAssigned = agentMCPServers?.some((s) => s.id === server.id);
-                    return (
-                      <label
-                        key={server.id}
-                        className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted/30 p-1 rounded"
-                      >
-                        <Checkbox
-                          checked={isAssigned}
-                          onCheckedChange={(checked) =>
-                            handleMCPServerToggle(server.id, checked === true)
-                          }
-                          disabled={assignMCPServers.isPending}
-                        />
-                        <span className="flex-1">{server.name}</span>
-                        <Badge variant="outline" className="text-xs">
-                          {server.transport_type}
-                        </Badge>
-                        {server.cached_tools_count > 0 && (
-                          <span className="text-xs text-muted-foreground">
-                            {server.cached_tools_count} tools
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
+                </Badge>
               )}
             </div>
-          )}
-
-          {/* Test Chat */}
-          <div className="flex flex-col flex-1 min-h-0 border rounded-lg overflow-hidden">
-            {/* Chat header */}
-            <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30 shrink-0">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Play className="h-4 w-4" />
-                Test Chat
-                {sessionId && (
-                  <Badge variant="outline" className="text-xs">
-                    Session #{sessionId}
-                  </Badge>
-                )}
-              </div>
+            <div className="flex items-center gap-1">
+              {/* Streaming toggle */}
+              {isEditing && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant={streamingEnabled ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setStreamingEnabled(!streamingEnabled)}
+                        className="h-7 px-2"
+                      >
+                        {streamingEnabled ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {streamingEnabled ? 'Streaming enabled (click to disable)' : 'Streaming disabled (click to enable)'}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
               <Button variant="ghost" size="sm" onClick={handleNewSession}>
                 <RotateCcw className="h-3 w-3 mr-1" />
                 Reset
               </Button>
             </div>
+          </div>
 
-            {!isEditing || !agentId ? (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm p-4 text-center">
-                <div>
-                  <Bot className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p>Save the agent first to enable testing.</p>
-                  <p className="text-xs mt-1">
-                    The test chat will appear here after you create the agent.
-                  </p>
-                </div>
+          {!isEditing || !agentId ? (
+            <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm p-4 text-center">
+              <div>
+                <Bot className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p>Save the agent first to enable testing.</p>
+                <p className="text-xs mt-1">
+                  The test chat will appear here after you create the agent.
+                </p>
               </div>
-            ) : (
+            </div>
+          ) : (
             <>
               {/* Chat messages */}
               <ScrollArea className="flex-1 p-3">
@@ -784,13 +1282,17 @@ export function AgentEditorPage() {
                     {messages.map((msg) => (
                       <MessageBubble key={msg.id} message={msg} />
                     ))}
-                    {invokeAgent.isPending && (
+                    {/* Show pending indicator during streaming or REST API call */}
+                    {(isChatBusy || pendingAssistantMessage) && (
                       <div className="flex gap-2">
                         <div className="h-7 w-7 rounded-full flex items-center justify-center bg-muted shrink-0">
                           <Bot className="h-3 w-3" />
                         </div>
-                        <div className="bg-muted rounded-lg px-3 py-2">
+                        <div className="bg-muted rounded-lg px-3 py-2 flex items-center gap-2">
                           <Spinner className="h-4 w-4" />
+                          {pendingAssistantMessage && (
+                            <span className="text-sm text-muted-foreground">{pendingAssistantMessage}</span>
+                          )}
                         </div>
                       </div>
                     )}
@@ -799,20 +1301,18 @@ export function AgentEditorPage() {
                 )}
               </ScrollArea>
 
-              {/* Trace steps (collapsible) */}
-              {traceSteps.length > 0 && (
-                <div className="border-t shrink-0">
-                  <details className="group">
-                    <summary className="px-3 py-2 cursor-pointer flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground">
-                      <GitBranch className="h-3 w-3" />
-                      Execution Trace ({traceSteps.length} steps)
-                    </summary>
-                    <div className="px-3 pb-2 space-y-2 max-h-32 overflow-y-auto">
-                      {traceSteps.slice(-5).map((step, index) => (
-                        <TraceStepItem key={`${step.id}-${index}`} step={step} />
-                      ))}
-                    </div>
-                  </details>
+              {/* View session details button */}
+              {sessionId && traceSteps.length > 0 && (
+                <div className="border-t px-3 py-2 shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setSessionDetailOpen(true)}
+                  >
+                    <Eye className="h-4 w-4 mr-2" />
+                    View Session Details ({traceSteps.length} steps)
+                  </Button>
                 </div>
               )}
 
@@ -834,25 +1334,42 @@ export function AgentEditorPage() {
                     onChange={(e) => setInputValue(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Type a message... (Shift+Enter for new line)"
-                    disabled={invokeAgent.isPending}
+                    disabled={isChatBusy}
                     className="text-sm min-h-[36px] max-h-[120px] resize-none"
                     rows={1}
                   />
-                  <Button
-                    size="sm"
-                    onClick={handleSendMessage}
-                    disabled={!inputValue.trim() || invokeAgent.isPending}
-                    className="shrink-0 h-[36px]"
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
+                  {isChatBusy ? (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handleStopExecution}
+                      className="shrink-0 h-[36px]"
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={handleSendMessage}
+                      disabled={!inputValue.trim()}
+                      className="shrink-0 h-[36px]"
+                    >
+                      <Send className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
             </>
-            )}
-          </div>
+          )}
         </div>
       </div>
+
+      {/* Session Detail Dialog */}
+      <SessionDetailDialog
+        sessionId={sessionId}
+        open={sessionDetailOpen}
+        onClose={() => setSessionDetailOpen(false)}
+      />
     </div>
   );
 }

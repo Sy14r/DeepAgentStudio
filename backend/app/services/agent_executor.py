@@ -23,7 +23,8 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain.tools import BaseTool
 
 # Local imports
-from ..models.agent import Agent, AgentVersion, AgentType
+from ..models.agent import Agent, AgentVersion
+from ..models.agent_type import ExecutionStrategy
 from ..models.mcp_server import MCPServerConfig
 from ..models.session import Session, SessionStatus, TraceStepType
 from .llm_adapter import LLMProviderAdapter, LLMAdapterError, create_llm_from_agent_config
@@ -325,7 +326,7 @@ class AgentExecutorService:
 
             # Build and execute agent
             result = self._execute_agent(
-                agent_type=agent.agent_type,
+                execution_strategy=agent.agent_type_config.execution_strategy,
                 llm=llm,
                 tools=all_tools,
                 input_message=input_message,
@@ -539,7 +540,7 @@ class AgentExecutorService:
 
     def _execute_agent(
         self,
-        agent_type: AgentType,
+        execution_strategy: ExecutionStrategy,
         llm,
         tools: List[BaseTool],
         input_message: str,
@@ -548,25 +549,25 @@ class AgentExecutorService:
         timeout_seconds: int,
         chat_history: List = None
     ) -> ExecutionResult:
-        """Execute the appropriate agent type"""
+        """Execute the appropriate agent type based on execution strategy"""
         if chat_history is None:
             chat_history = []
 
-        if agent_type == AgentType.REACT:
+        if execution_strategy == ExecutionStrategy.react:
             return self._execute_react_agent(
                 llm, tools, input_message, config, recorder, timeout_seconds, chat_history
             )
-        elif agent_type == AgentType.PLAN_AND_EXECUTE:
+        elif execution_strategy == ExecutionStrategy.plan_and_execute:
             return self._execute_plan_and_execute_agent(
                 llm, tools, input_message, config, recorder, timeout_seconds, chat_history
             )
-        elif agent_type == AgentType.CONVERSATIONAL:
+        elif execution_strategy == ExecutionStrategy.conversational:
             return self._execute_conversational_agent(
                 llm, tools, input_message, config, recorder, timeout_seconds, chat_history
             )
         else:
             raise AgentConfigurationError(
-                f"Unsupported agent type: {agent_type}"
+                f"Unsupported execution strategy: {execution_strategy}"
             )
 
     def _execute_react_agent(

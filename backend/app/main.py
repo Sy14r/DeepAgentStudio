@@ -66,10 +66,11 @@ async def health_check():
 
 
 # API routers
-from .api.v1 import auth, agents, tools, prompts, sessions, llm_providers, websocket, mcp_servers
+from .api.v1 import auth, agents, agent_types, tools, prompts, sessions, llm_providers, websocket, mcp_servers
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
+app.include_router(agent_types.router, prefix="/api/v1/agent-types", tags=["agent-types"])
 app.include_router(tools.router, prefix="/api/v1/tools", tags=["tools"])
 app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(sessions.router, prefix="/api/v1/sessions", tags=["sessions"])

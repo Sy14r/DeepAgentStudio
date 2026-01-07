@@ -8,6 +8,17 @@ export {
   useCloneAgent,
 } from './useAgents';
 export {
+  useAgentTypes,
+  useAgentType,
+  useCreateAgentType,
+  useUpdateAgentType,
+  useDeleteAgentType,
+  useCloneAgentType,
+  useValidateStrategyCode,
+  useStrategyTemplates,
+  useStrategyTemplate,
+} from './useAgentTypes';
+export {
   useTools,
   useTool,
   useCreateTool,

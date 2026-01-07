@@ -2,14 +2,15 @@
 Agent management API endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import insert, delete as sql_delete
-from typing import List
+from typing import List, Optional
 import logging
 
 from ...database import get_db
 from ...models.user import User
 from ...models.agent import Agent, AgentVersion
+from ...models.agent_type import AgentTypeConfig
 from ...models.tool import Tool, ToolType, agent_tools
 from ...models.mcp_server import MCPServerConfig, agent_mcp_servers
 from ...schemas.agent import (
@@ -48,6 +49,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _build_agent_type_config_compact(agent_type_config: AgentTypeConfig) -> dict:
+    """Helper to build compact agent type config response as dict"""
+    return {
+        "id": agent_type_config.id,
+        "name": agent_type_config.name,
+        "description": agent_type_config.description,
+        "icon": agent_type_config.icon,
+        "execution_strategy": agent_type_config.execution_strategy.value,
+        "strategy_type": agent_type_config.strategy_type.value,
+        "is_builtin": agent_type_config.is_builtin
+    }
+
+
 def _build_agent_detail_response(agent: Agent, db: Session) -> AgentDetailResponse:
     """Helper function to build AgentDetailResponse with current version"""
     current_version = None
@@ -58,12 +72,18 @@ def _build_agent_detail_response(agent: Agent, db: Session) -> AgentDetailRespon
         if version:
             current_version = AgentVersionResponse.model_validate(version)
 
+    # Build agent type config compact
+    agent_type_config = None
+    if agent.agent_type_config:
+        agent_type_config = _build_agent_type_config_compact(agent.agent_type_config)
+
     return AgentDetailResponse(
         id=agent.id,
         user_id=agent.user_id,
         name=agent.name,
         description=agent.description,
-        agent_type=agent.agent_type,
+        agent_type_id=agent.agent_type_id,
+        agent_type_config=agent_type_config,
         tags=agent.tags,
         is_active=agent.is_active,
         current_version_id=agent.current_version_id,
@@ -84,12 +104,30 @@ def create_agent(
 
     Creates both an Agent record and its first AgentVersion.
     """
+    # Validate agent_type_id exists and user has access
+    agent_type_config = db.query(AgentTypeConfig).filter(
+        AgentTypeConfig.id == agent_data.agent_type_id
+    ).first()
+
+    if not agent_type_config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent type with ID {agent_data.agent_type_id} not found"
+        )
+
+    # Check access: builtin types are public, custom types must be owned by user
+    if not agent_type_config.is_builtin and agent_type_config.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this agent type"
+        )
+
     # Create agent
     agent = Agent(
         user_id=current_user.id,
         name=agent_data.name,
         description=agent_data.description,
-        agent_type=agent_data.agent_type,
+        agent_type_id=agent_data.agent_type_id,
         tags=agent_data.tags
     )
     db.add(agent)
@@ -115,27 +153,54 @@ def create_agent(
     return _build_agent_detail_response(agent, db)
 
 
+def _build_agent_response(agent: Agent) -> AgentResponse:
+    """Build AgentResponse with agent_type_config"""
+    agent_type_config = None
+    if agent.agent_type_config:
+        agent_type_config = _build_agent_type_config_compact(agent.agent_type_config)
+
+    return AgentResponse(
+        id=agent.id,
+        user_id=agent.user_id,
+        name=agent.name,
+        description=agent.description,
+        agent_type_id=agent.agent_type_id,
+        agent_type_config=agent_type_config,
+        tags=agent.tags,
+        is_active=agent.is_active,
+        current_version_id=agent.current_version_id,
+        created_at=agent.created_at,
+        updated_at=agent.updated_at
+    )
+
+
 @router.get("", response_model=AgentListResponse)
 def list_agents(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     active_only: bool = Query(True, description="Only return active agents"),
+    agent_type_id: Optional[int] = Query(None, description="Filter by agent type ID"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     List all agents for the current user with pagination.
     """
-    query = db.query(Agent).filter(Agent.user_id == current_user.id)
+    query = db.query(Agent).options(
+        joinedload(Agent.agent_type_config)
+    ).filter(Agent.user_id == current_user.id)
 
     if active_only:
         query = query.filter(Agent.is_active == True)
+
+    if agent_type_id is not None:
+        query = query.filter(Agent.agent_type_id == agent_type_id)
 
     total = query.count()
     agents = query.order_by(Agent.updated_at.desc()).offset(skip).limit(limit).all()
 
     return AgentListResponse(
-        agents=[AgentResponse.model_validate(agent) for agent in agents],
+        agents=[_build_agent_response(agent) for agent in agents],
         total=total,
         page=skip // limit + 1,
         page_size=limit
@@ -151,7 +216,9 @@ def get_agent(
     """
     Get agent details including current version.
     """
-    agent = db.query(Agent).filter(
+    agent = db.query(Agent).options(
+        joinedload(Agent.agent_type_config)
+    ).filter(
         Agent.id == agent_id,
         Agent.user_id == current_user.id
     ).first()
@@ -193,8 +260,23 @@ def update_agent(
         agent.name = agent_data.name
     if agent_data.description is not None:
         agent.description = agent_data.description
-    if agent_data.agent_type is not None:
-        agent.agent_type = agent_data.agent_type
+    if agent_data.agent_type_id is not None:
+        # Validate new agent_type_id
+        new_agent_type = db.query(AgentTypeConfig).filter(
+            AgentTypeConfig.id == agent_data.agent_type_id
+        ).first()
+        if not new_agent_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Agent type with ID {agent_data.agent_type_id} not found"
+            )
+        # Check access
+        if not new_agent_type.is_builtin and new_agent_type.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this agent type"
+            )
+        agent.agent_type_id = agent_data.agent_type_id
     if agent_data.tags is not None:
         agent.tags = agent_data.tags
 

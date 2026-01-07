@@ -7,6 +7,8 @@ import {
   DashboardPage,
   AgentsPage,
   AgentEditorPage,
+  AgentTypesPage,
+  AgentTypeEditorPage,
   ToolsPage,
   ToolEditorPage,
   MCPServerEditorPage,
@@ -53,6 +55,11 @@ function App() {
         <Route path="agents/new" element={<AgentEditorPage />} />
         <Route path="agents/:id" element={<AgentEditorPage />} />
         <Route path="agents/:id/edit" element={<AgentEditorPage />} />
+
+        {/* Agent Types */}
+        <Route path="agent-types" element={<AgentTypesPage />} />
+        <Route path="agent-types/new" element={<AgentTypeEditorPage />} />
+        <Route path="agent-types/:id/edit" element={<AgentTypeEditorPage />} />
 
         {/* Tools */}
         <Route path="tools" element={<ToolsPage />} />

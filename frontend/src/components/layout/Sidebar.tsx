@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   Bot,
+  Sparkles,
   Wrench,
   FileText,
   Play,
@@ -26,6 +27,7 @@ const mainNavItems: NavItem[] = [
 
 const managementNavItems: NavItem[] = [
   { title: 'Agents', href: '/agents', icon: Bot },
+  { title: 'Agent Types', href: '/agent-types', icon: Sparkles },
   { title: 'Tools', href: '/tools', icon: Wrench },
   { title: 'Prompts', href: '/prompts', icon: FileText },
 ];

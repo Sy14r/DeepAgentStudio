@@ -143,7 +143,7 @@ curl -X POST "http://localhost:8000/api/v1/auth/register" \
 - Clone existing agents
 - Configure LLM settings (provider, model, temperature, max tokens)
 - Assign Python tools and MCP servers to agents
-- Integrated test chat panel in agent editor
+- **Integrated test chat panel** with WebSocket streaming, stop/cancel, and real-time trace display
 
 ### Tool Library
 - **Built-in tools**: Python Code Execution (sandboxed), HTTP Requests
@@ -187,7 +187,7 @@ curl -X POST "http://localhost:8000/api/v1/auth/register" \
 - Performance metrics (latency, token usage, cost)
 - Filter by agent or status
 - Session statistics dashboard
-- **Session detail dialog** with scroll indicator for overflow content
+- **Session detail dialog** with auto-refresh during execution and scroll indicator for overflow content
 
 ### LLM Provider Configuration
 - Support for 6 provider types
@@ -340,6 +340,8 @@ Key configuration (see `backend/.env.example`):
 - **Dashboard**: Real-time stats, recent activity, quick start links
 - **Theme persistence**: User preferences saved across sessions
 - **Multi-line chat input**: Enhanced text input with auto-resize
+- **Agent Editor streaming**: Test chat panel with WebSocket streaming and stop/cancel
+- **Session dialog auto-refresh**: Live updates while sessions are running
 
 ### Planned
 - Summary memory (LLM-based summarization for long conversations)
