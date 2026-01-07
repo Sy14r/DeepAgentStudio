@@ -159,18 +159,21 @@ function TraceStepItem({ step }: { step: TraceStepDisplay }) {
 }
 
 export function PlaygroundPage() {
-  const { agentId: paramAgentId } = useParams<{ agentId: string }>();
+  const { agentId: paramAgentId, sessionId: paramSessionId } = useParams<{ agentId: string; sessionId: string }>();
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(
     paramAgentId ? parseInt(paramAgentId) : null
   );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [traceSteps, setTraceSteps] = useState<TraceStepDisplay[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [sessionId, setSessionId] = useState<number | null>(
+    paramSessionId ? parseInt(paramSessionId) : null
+  );
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [streamingEnabled, setStreamingEnabled] = useState(true);
   const [pendingStreamMessage, setPendingStreamMessage] = useState<string | null>(null);
+  const [hasLoadedUrlSession, setHasLoadedUrlSession] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -309,6 +312,16 @@ export function PlaygroundPage() {
       setSelectedAgentId(parseInt(paramAgentId));
     }
   }, [paramAgentId]);
+
+  // Load session from URL parameter (resume session)
+  useEffect(() => {
+    if (paramSessionId && !hasLoadedUrlSession) {
+      const urlSessionId = parseInt(paramSessionId);
+      setSessionId(urlSessionId);
+      setIsLoadingHistory(true);
+      setHasLoadedUrlSession(true);
+    }
+  }, [paramSessionId, hasLoadedUrlSession]);
 
   // Load messages when resuming a session
   useEffect(() => {

@@ -20,6 +20,14 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
+  Input,
+  Label,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from '@/components/ui';
 import {
   History,
@@ -38,8 +46,14 @@ import {
   BarChart3,
   MessageSquare,
   Zap,
+  Play,
+  LayoutGrid,
+  List,
+  MoreVertical,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
-import { useSessions, useSession, useSessionStatistics, useAgents, getErrorMessage } from '@/api/hooks';
+import { useSessions, useSession, useSessionStatistics, useAgents, useUpdateSession, useDeleteSession, getErrorMessage } from '@/api/hooks';
 import { Session, SessionStatus, TraceStep, Message, TraceStepType } from '@/api/types';
 
 const STATUS_OPTIONS: { value: SessionStatus | 'all'; label: string }[] = [
@@ -83,10 +97,13 @@ function getStatusColor(status: SessionStatus) {
 interface SessionCardProps {
   session: Session;
   onView: (id: number) => void;
+  onResume: (session: Session) => void;
+  onRename: (session: Session) => void;
+  onDelete: (id: number) => void;
   agentName?: string;
 }
 
-function SessionCard({ session, onView, agentName }: SessionCardProps) {
+function SessionCard({ session, onView, onResume, onRename, onDelete, agentName }: SessionCardProps) {
   return (
     <Card className="group hover:border-primary/50 transition-colors">
       <CardHeader className="pb-3">
@@ -97,9 +114,32 @@ function SessionCard({ session, onView, agentName }: SessionCardProps) {
               {session.title || `Session #${session.id}`}
             </CardTitle>
           </div>
-          <Badge className={getStatusColor(session.status)}>
-            {session.status}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge className={getStatusColor(session.status)}>
+              {session.status}
+            </Badge>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => onRename(session)}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Rename
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onClick={() => onDelete(session.id)}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         <CardDescription>
           {agentName || 'Unknown Agent'} - {new Date(session.started_at).toLocaleString()}
@@ -134,17 +174,116 @@ function SessionCard({ session, onView, agentName }: SessionCardProps) {
             </AlertDescription>
           </Alert>
         )}
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full"
-          onClick={() => onView(session.id)}
-        >
-          <Eye className="h-4 w-4 mr-2" />
-          View Details
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={() => onView(session.id)}
+          >
+            <Eye className="h-4 w-4 mr-2" />
+            View Details
+          </Button>
+          {session.agent_id && (
+            <Button
+              variant="default"
+              size="sm"
+              className="flex-1"
+              onClick={() => onResume(session)}
+            >
+              <Play className="h-4 w-4 mr-2" />
+              Resume
+            </Button>
+          )}
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+// Session list item component for list view
+interface SessionListItemProps {
+  session: Session;
+  onView: (id: number) => void;
+  onResume: (session: Session) => void;
+  onRename: (session: Session) => void;
+  onDelete: (id: number) => void;
+  agentName?: string;
+}
+
+function SessionListItem({ session, onView, onResume, onRename, onDelete, agentName }: SessionListItemProps) {
+  return (
+    <div className="flex items-center justify-between p-4 border rounded-lg hover:border-primary/50 transition-colors">
+      <div className="flex items-center gap-4 flex-1 min-w-0">
+        {getStatusIcon(session.status)}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="font-medium truncate">
+              {session.title || `Session #${session.id}`}
+            </p>
+            <Badge className={getStatusColor(session.status)} variant="secondary">
+              {session.status}
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground truncate">
+            {agentName || 'Unknown Agent'} - {new Date(session.started_at).toLocaleString()}
+          </p>
+        </div>
+        <div className="hidden md:flex items-center gap-6 text-sm text-muted-foreground">
+          <div className="text-center">
+            <p className="text-xs">Tokens</p>
+            <p className="font-medium text-foreground">
+              {(session.token_usage_input + session.token_usage_output).toLocaleString()}
+            </p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs">Latency</p>
+            <p className="font-medium text-foreground">
+              {session.total_latency_ms ? `${session.total_latency_ms}ms` : '-'}
+            </p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs">Cost</p>
+            <p className="font-medium text-foreground">
+              {session.total_cost ? `$${session.total_cost.toFixed(4)}` : '-'}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 ml-4">
+        <Button variant="ghost" size="sm" onClick={() => onView(session.id)}>
+          <Eye className="h-4 w-4 mr-2" />
+          View
+        </Button>
+        {session.agent_id && (
+          <Button variant="ghost" size="sm" onClick={() => onResume(session)}>
+            <Play className="h-4 w-4 mr-2" />
+            Resume
+          </Button>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => onRename(session)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive"
+              onClick={() => onDelete(session.id)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
   );
 }
 
@@ -426,6 +565,66 @@ function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailDialogPr
   );
 }
 
+// Rename Dialog Component
+interface RenameDialogProps {
+  session: Session | null;
+  open: boolean;
+  onClose: () => void;
+  onSave: (sessionId: number, newTitle: string) => void;
+  isPending: boolean;
+}
+
+function RenameDialog({ session, open, onClose, onSave, isPending }: RenameDialogProps) {
+  const [title, setTitle] = useState('');
+
+  useEffect(() => {
+    if (session) {
+      setTitle(session.title || `Session #${session.id}`);
+    }
+  }, [session]);
+
+  const handleSave = () => {
+    if (session && title.trim()) {
+      onSave(session.id, title.trim());
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Rename Session</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="session-title">Session Title</Label>
+            <Input
+              id="session-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Enter session title..."
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !isPending) {
+                  handleSave();
+                }
+              }}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={isPending || !title.trim()}>
+            {isPending ? <Spinner className="h-4 w-4 mr-2" /> : null}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function SessionsPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -433,9 +632,18 @@ export function SessionsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [agentFilter, setAgentFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(
     id ? parseInt(id) : null
   );
+  const [renameSession, setRenameSession] = useState<Session | null>(null);
+
+  // Sync URL param with state - handles navigation from sidebar while already on sessions page
+  useEffect(() => {
+    if (id) {
+      setSelectedSessionId(parseInt(id));
+    }
+  }, [id]);
 
   const pageSize = 12;
 
@@ -453,6 +661,9 @@ export function SessionsPage() {
     agentFilter !== 'all' ? parseInt(agentFilter) : undefined
   );
 
+  const updateSession = useUpdateSession();
+  const deleteSession = useDeleteSession();
+
   const agentMap = new Map(agents.map((a) => [a.id, a.name]));
 
   const handleView = (sessionId: number) => {
@@ -463,6 +674,33 @@ export function SessionsPage() {
   const handleCloseDetail = () => {
     setSelectedSessionId(null);
     navigate('/sessions');
+  };
+
+  const handleResume = (session: Session) => {
+    if (session.agent_id) {
+      navigate(`/playground/${session.agent_id}/session/${session.id}`);
+    }
+  };
+
+  const handleRename = (session: Session) => {
+    setRenameSession(session);
+  };
+
+  const handleSaveRename = (sessionId: number, newTitle: string) => {
+    updateSession.mutate(
+      { sessionId, data: { title: newTitle } },
+      {
+        onSuccess: () => {
+          setRenameSession(null);
+        },
+      }
+    );
+  };
+
+  const handleDelete = (sessionId: number) => {
+    if (confirm('Are you sure you want to delete this session? This action cannot be undone.')) {
+      deleteSession.mutate(sessionId);
+    }
   };
 
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
@@ -538,45 +776,67 @@ export function SessionsPage() {
       )}
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <Select
-          value={agentFilter}
-          onValueChange={(value) => {
-            setAgentFilter(value);
-            setPage(1);
-          }}
-        >
-          <SelectTrigger className="w-[200px]">
-            <SelectValue placeholder="Filter by Agent" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Agents</SelectItem>
-            {agents.map((agent) => (
-              <SelectItem key={agent.id} value={agent.id.toString()}>
-                {agent.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="flex flex-col sm:flex-row gap-4 justify-between">
+        <div className="flex flex-col sm:flex-row gap-4">
+          <Select
+            value={agentFilter}
+            onValueChange={(value) => {
+              setAgentFilter(value);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="Filter by Agent" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Agents</SelectItem>
+              {agents.map((agent) => (
+                <SelectItem key={agent.id} value={agent.id.toString()}>
+                  {agent.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
-        <Select
-          value={statusFilter}
-          onValueChange={(value) => {
-            setStatusFilter(value);
-            setPage(1);
-          }}
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Filter by Status" />
-          </SelectTrigger>
-          <SelectContent>
-            {STATUS_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          <Select
+            value={statusFilter}
+            onValueChange={(value) => {
+              setStatusFilter(value);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Filter by Status" />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* View Mode Toggle */}
+        <div className="flex items-center gap-1 border rounded-lg p-1">
+          <Button
+            variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setViewMode('grid')}
+            className="h-8 w-8 p-0"
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </Button>
+          <Button
+            variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setViewMode('list')}
+            className="h-8 w-8 p-0"
+          >
+            <List className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Error */}
@@ -617,14 +877,33 @@ export function SessionsPage() {
         </Card>
       )}
 
-      {/* Sessions Grid */}
-      {!isLoading && sessions.length > 0 && (
+      {/* Sessions Grid/List */}
+      {!isLoading && sessions.length > 0 && viewMode === 'grid' && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {sessions.map((session) => (
             <SessionCard
               key={session.id}
               session={session}
               onView={handleView}
+              onResume={handleResume}
+              onRename={handleRename}
+              onDelete={handleDelete}
+              agentName={session.agent_id ? agentMap.get(session.agent_id) : undefined}
+            />
+          ))}
+        </div>
+      )}
+
+      {!isLoading && sessions.length > 0 && viewMode === 'list' && (
+        <div className="space-y-2">
+          {sessions.map((session) => (
+            <SessionListItem
+              key={session.id}
+              session={session}
+              onView={handleView}
+              onResume={handleResume}
+              onRename={handleRename}
+              onDelete={handleDelete}
               agentName={session.agent_id ? agentMap.get(session.agent_id) : undefined}
             />
           ))}
@@ -663,6 +942,15 @@ export function SessionsPage() {
         sessionId={selectedSessionId}
         open={!!selectedSessionId}
         onClose={handleCloseDetail}
+      />
+
+      {/* Rename Dialog */}
+      <RenameDialog
+        session={renameSession}
+        open={!!renameSession}
+        onClose={() => setRenameSession(null)}
+        onSave={handleSaveRename}
+        isPending={updateSession.isPending}
       />
     </div>
   );

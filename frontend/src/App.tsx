@@ -78,6 +78,7 @@ function App() {
         {/* Playground */}
         <Route path="playground" element={<PlaygroundPage />} />
         <Route path="playground/:agentId" element={<PlaygroundPage />} />
+        <Route path="playground/:agentId/session/:sessionId" element={<PlaygroundPage />} />
 
         {/* Sessions */}
         <Route path="sessions" element={<SessionsPage />} />

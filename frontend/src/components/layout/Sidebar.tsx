@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Bot,
@@ -9,10 +9,13 @@ import {
   History,
   Settings,
   ChevronLeft,
+  MessageSquare,
+  Eye,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/uiStore';
 import { Button, ScrollArea, Separator, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui';
+import { useSessions } from '@/api/hooks';
 
 interface NavItem {
   title: string;
@@ -90,6 +93,113 @@ function NavSection({ title, items, collapsed }: { title?: string; items: NavIte
   );
 }
 
+function RecentSessions() {
+  const { data } = useSessions({ pageSize: 5 });
+  const sessions = data?.sessions || [];
+
+  if (sessions.length === 0) {
+    return (
+      <div className="px-3 py-2">
+        <h2 className="mb-2 px-4 text-xs font-semibold tracking-tight text-muted-foreground uppercase">
+          Recent Sessions
+        </h2>
+        <p className="px-4 text-xs text-muted-foreground">No sessions yet</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-3 py-2">
+      <h2 className="mb-2 px-4 text-xs font-semibold tracking-tight text-muted-foreground uppercase">
+        Recent Sessions
+      </h2>
+      <div className="space-y-1">
+        {sessions.map((session) => (
+          <SessionNavItem key={session.id} session={session} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface SessionNavItemProps {
+  session: {
+    id: number;
+    title: string | null;
+    agent_id: number | null;
+  };
+}
+
+function SessionNavItem({ session }: SessionNavItemProps) {
+  const navigate = useNavigate();
+
+  const handleView = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigate(`/sessions/${session.id}`);
+  };
+
+  const handleResume = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (session.agent_id) {
+      navigate(`/playground/${session.agent_id}/session/${session.id}`);
+    }
+  };
+
+  return (
+    <div className="group relative">
+      <NavLink
+        to={`/sessions/${session.id}`}
+        className={({ isActive }) =>
+          cn(
+            'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150',
+            isActive
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+          )
+        }
+      >
+        <MessageSquare className="h-4 w-4 shrink-0" />
+        <span className="truncate flex-1 pr-12">{session.title || `Session #${session.id}`}</span>
+      </NavLink>
+
+      {/* Hover action buttons */}
+      <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
+        <Tooltip delayDuration={0}>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleView}
+              className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Eye className="h-3.5 w-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            View Details
+          </TooltipContent>
+        </Tooltip>
+
+        {session.agent_id && (
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <button
+                onClick={handleResume}
+                className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Play className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              Resume in Playground
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useUIStore();
   const collapsed = !sidebarOpen;
@@ -145,6 +255,12 @@ export function Sidebar() {
               <NavSection title="Manage" items={managementNavItems} collapsed={collapsed} />
               <Separator className={cn("my-2", collapsed && "mx-3")} />
               <NavSection title="Activity" items={activityNavItems} collapsed={collapsed} />
+              {!collapsed && (
+                <>
+                  <Separator className="my-2" />
+                  <RecentSessions />
+                </>
+              )}
             </div>
           </div>
         </ScrollArea>

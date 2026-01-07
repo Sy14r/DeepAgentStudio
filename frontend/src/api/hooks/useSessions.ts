@@ -1,6 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
 import { SessionListResponse, SessionDetail, SessionStatus, SessionStatistics, Message } from '@/api/types';
+
+interface SessionUpdateData {
+  title?: string;
+}
 
 interface UseSessionsParams {
   page?: number;
@@ -73,5 +77,40 @@ export function useSessionMessages(sessionId: number | undefined) {
       return response.data;
     },
     enabled: !!sessionId,
+  });
+}
+
+/**
+ * Update session data (e.g., rename).
+ */
+export function useUpdateSession() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ sessionId, data }: { sessionId: number; data: SessionUpdateData }) => {
+      const response = await apiClient.put<SessionDetail>(`/sessions/${sessionId}`, data);
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+      queryClient.setQueryData(['sessions', data.id], data);
+    },
+  });
+}
+
+/**
+ * Delete a session.
+ */
+export function useDeleteSession() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (sessionId: number) => {
+      await apiClient.delete(`/sessions/${sessionId}`);
+      return sessionId;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    },
   });
 }
