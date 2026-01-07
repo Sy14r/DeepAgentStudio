@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useSession, getErrorMessage } from '@/api/hooks';
 import { SessionStatus, TraceStep, Message, TraceStepType } from '@/api/types';
+import { ContentBlockRenderer } from '@/components/chat/content-blocks';
 
 function getStatusIcon(status: SessionStatus) {
   switch (status) {
@@ -150,6 +151,14 @@ function MessageItem({ message }: { message: Message }) {
       >
         <p className="text-xs font-medium mb-1 capitalize">{message.role}</p>
         <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+        {/* Render content blocks (images, audio, video, files) */}
+        {message.content_blocks && message.content_blocks.length > 0 && (
+          <div className="mt-2 space-y-2">
+            {message.content_blocks.map((block, index) => (
+              <ContentBlockRenderer key={index} block={block} />
+            ))}
+          </div>
+        )}
         <p className="text-xs opacity-70 mt-1">
           {new Date(message.created_at).toLocaleTimeString()}
         </p>

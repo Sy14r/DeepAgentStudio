@@ -271,7 +271,10 @@ class StreamingAgentExecutorService(AgentExecutorService):
             })
 
             # Record and finish session
-            recorder.record_assistant_message(result.output or "")
+            recorder.record_assistant_message(
+                result.output or "",
+                content_blocks=result.content_blocks
+            )
             recorder.finish_session(
                 status=SessionStatus.COMPLETED,
                 output=result.output,

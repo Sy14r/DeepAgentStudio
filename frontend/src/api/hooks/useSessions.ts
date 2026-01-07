@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
-import { SessionListResponse, SessionDetail, SessionStatus, SessionStatistics, Message } from '@/api/types';
+import { SessionListResponse, SessionDetail, SessionStatus, SessionStatistics, Message, TraceStep } from '@/api/types';
 
 interface SessionUpdateData {
   title?: string;
@@ -77,6 +77,22 @@ export function useSessionMessages(sessionId: number | undefined) {
       return response.data;
     },
     enabled: !!sessionId,
+  });
+}
+
+/**
+ * Fetch trace steps for a specific session.
+ * Used to sync real-time traces with complete database traces.
+ */
+export function useSessionTraces(sessionId: number | undefined, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['sessions', sessionId, 'traces'],
+    queryFn: async () => {
+      if (!sessionId) throw new Error('Session ID is required');
+      const response = await apiClient.get<TraceStep[]>(`/sessions/${sessionId}/traces`);
+      return response.data;
+    },
+    enabled: options?.enabled !== undefined ? options.enabled && !!sessionId : !!sessionId,
   });
 }
 

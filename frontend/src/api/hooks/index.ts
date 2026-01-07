@@ -55,7 +55,7 @@ export {
   useDeletePrompt,
 } from './usePrompts';
 export { useInvokeAgent } from './useInvoke';
-export { useSessions, useSession, useSessionStatistics, useUpdateSession, useDeleteSession } from './useSessions';
+export { useSessions, useSession, useSessionStatistics, useSessionMessages, useSessionTraces, useUpdateSession, useDeleteSession } from './useSessions';
 export { useAgentWebSocket } from './useAgentWebSocket';
 export type {
   UseAgentWebSocketOptions,

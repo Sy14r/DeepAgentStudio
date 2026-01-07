@@ -9,7 +9,6 @@ import {
   History,
   Settings,
   ChevronLeft,
-  MessageSquare,
   Eye,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -132,6 +131,8 @@ interface SessionNavItemProps {
 
 function SessionNavItem({ session }: SessionNavItemProps) {
   const navigate = useNavigate();
+  const fullTitle = session.title || `Session #${session.id}`;
+  const displayTitle = fullTitle.length > 20 ? `${fullTitle.slice(0, 20)}...` : fullTitle;
 
   const handleView = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -148,55 +149,61 @@ function SessionNavItem({ session }: SessionNavItemProps) {
   };
 
   return (
-    <div className="group relative">
-      <NavLink
-        to={`/sessions/${session.id}`}
-        className={({ isActive }) =>
-          cn(
-            'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150',
-            isActive
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-          )
-        }
-      >
-        <MessageSquare className="h-4 w-4 shrink-0" />
-        <span className="truncate flex-1 pr-12">{session.title || `Session #${session.id}`}</span>
-      </NavLink>
+    <Tooltip delayDuration={300}>
+      <TooltipTrigger asChild>
+        <div className="group relative">
+          <NavLink
+            to={`/sessions/${session.id}`}
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150',
+                isActive
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+              )
+            }
+          >
+            <span className="truncate flex-1 pr-12">{displayTitle}</span>
+          </NavLink>
 
-      {/* Hover action buttons */}
-      <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
-        <Tooltip delayDuration={0}>
-          <TooltipTrigger asChild>
-            <button
-              onClick={handleView}
-              className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <Eye className="h-3.5 w-3.5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            View Details
-          </TooltipContent>
-        </Tooltip>
+          {/* Hover action buttons */}
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
+            <Tooltip delayDuration={0}>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={handleView}
+                  className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                View Details
+              </TooltipContent>
+            </Tooltip>
 
-        {session.agent_id && (
-          <Tooltip delayDuration={0}>
-            <TooltipTrigger asChild>
-              <button
-                onClick={handleResume}
-                className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Play className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              Resume in Playground
-            </TooltipContent>
-          </Tooltip>
-        )}
-      </div>
-    </div>
+            {session.agent_id && (
+              <Tooltip delayDuration={0}>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleResume}
+                    className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  Resume in Playground
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="max-w-xs">
+        {fullTitle}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

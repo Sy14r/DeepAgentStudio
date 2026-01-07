@@ -176,6 +176,7 @@ class SessionRecorder:
         self,
         content: str,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
+        content_blocks: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Message:
         """
@@ -184,6 +185,7 @@ class SessionRecorder:
         Args:
             content: Message content
             tool_calls: Optional list of tool calls made
+            content_blocks: Optional list of content blocks (images, audio, video, files)
             metadata: Optional additional metadata
 
         Returns:
@@ -193,6 +195,7 @@ class SessionRecorder:
             MessageRole.ASSISTANT,
             content,
             tool_calls=tool_calls,
+            content_blocks=content_blocks,
             metadata=metadata
         )
 
@@ -239,6 +242,7 @@ class SessionRecorder:
         content: str,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
         tool_call_id: Optional[str] = None,
+        content_blocks: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Message:
         """
@@ -249,6 +253,7 @@ class SessionRecorder:
             content: Message content
             tool_calls: Tool calls (for assistant messages)
             tool_call_id: Tool call ID (for tool messages)
+            content_blocks: Content blocks for multimodal output (images, audio, video, files)
             metadata: Additional metadata
 
         Returns:
@@ -261,6 +266,7 @@ class SessionRecorder:
             sequence_number=self._message_sequence,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
+            content_blocks=content_blocks,
             meta=metadata or {}
         )
         self.db.add(message)

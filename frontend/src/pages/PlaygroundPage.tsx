@@ -42,7 +42,7 @@ import {
 } from 'lucide-react';
 import { useAgents, useInvokeAgent, useAgentWebSocket, getErrorMessage } from '@/api/hooks';
 import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload } from '@/api/hooks';
-import { useSessions, useSessionMessages } from '@/api/hooks/useSessions';
+import { useSessions, useSessionMessages, useSessionTraces } from '@/api/hooks/useSessions';
 import { TraceStep, Session, ContentBlock } from '@/api/types';
 
 interface ChatMessage {
@@ -92,12 +92,22 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             ))}
           </div>
         )}
-        {/* Content blocks (multimodal outputs) or text content */}
-        {message.content_blocks && message.content_blocks.length > 0 ? (
-          <ContentBlocks blocks={message.content_blocks} />
-        ) : (
-          <div className="prose prose-sm dark:prose-invert max-w-none">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+        {/* Text content - always render if present */}
+        {message.content && (() => {
+          // Strip markdown image syntax when we have content_blocks to avoid duplicates
+          const displayContent = message.content_blocks && message.content_blocks.length > 0
+            ? message.content.replace(/!\[([^\]]*)\]\([^)]+\)/g, '').trim()
+            : message.content;
+          return displayContent ? (
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <ReactMarkdown>{displayContent}</ReactMarkdown>
+            </div>
+          ) : null;
+        })()}
+        {/* Content blocks (multimodal outputs) - render below text content */}
+        {message.content_blocks && message.content_blocks.length > 0 && (
+          <div className={message.content ? 'mt-3' : ''}>
+            <ContentBlocks blocks={message.content_blocks} />
           </div>
         )}
         <p className="text-xs opacity-70 mt-1">
@@ -213,6 +223,9 @@ export function PlaygroundPage() {
 
   // Fetch messages when a session is selected for continuation
   const { data: sessionMessages } = useSessionMessages(sessionId || undefined);
+
+  // Fetch traces when resuming a session (will also be used to sync after execution)
+  const { data: sessionTraces, refetch: refetchTraces } = useSessionTraces(sessionId || undefined);
 
   const invokeAgent = useInvokeAgent(selectedAgentId || 0);
 
@@ -352,6 +365,45 @@ export function PlaygroundPage() {
       setIsLoadingHistory(false);
     }
   }, [sessionMessages, isLoadingHistory]);
+
+  // Load traces when resuming a session (complete database traces)
+  useEffect(() => {
+    if (sessionTraces && sessionTraces.length > 0 && isLoadingHistory) {
+      // Convert database traces to display format
+      const loadedTraces: TraceStepDisplay[] = sessionTraces.map((trace) => ({
+        ...trace,
+        timestamp: new Date(trace.created_at),
+      }));
+      setTraceSteps(loadedTraces);
+      // Update the ID ref to avoid collisions with new traces
+      traceStepIdRef.current = Math.max(...sessionTraces.map(t => t.id), traceStepIdRef.current);
+    }
+  }, [sessionTraces, isLoadingHistory]);
+
+  // Sync traces from database when execution completes
+  // This ensures we have complete traces (including THOUGHT steps that aren't sent via WebSocket)
+  const prevIsExecutingRef = useRef(isExecuting);
+  useEffect(() => {
+    // Detect transition from executing to not executing
+    if (prevIsExecutingRef.current && !isExecuting && sessionId) {
+      // Wait a moment for database to be updated, then refetch traces
+      const timer = setTimeout(() => {
+        refetchTraces().then((result) => {
+          if (result.data && result.data.length > 0) {
+            // Replace client-side traces with complete database traces
+            const syncedTraces: TraceStepDisplay[] = result.data.map((trace) => ({
+              ...trace,
+              timestamp: new Date(trace.created_at),
+            }));
+            setTraceSteps(syncedTraces);
+            traceStepIdRef.current = Math.max(...result.data.map(t => t.id), traceStepIdRef.current);
+          }
+        });
+      }, 500); // Small delay to ensure database is updated
+      return () => clearTimeout(timer);
+    }
+    prevIsExecutingRef.current = isExecuting;
+  }, [isExecuting, sessionId, refetchTraces]);
 
   const handleSendMessage = async (message: string, attachments: Attachment[]) => {
     if ((!message.trim() && attachments.length === 0) || !selectedAgentId) return;
