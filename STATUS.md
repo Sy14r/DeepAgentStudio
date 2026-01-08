@@ -17,7 +17,35 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ---
 
-## Recent Updates (2026-01-07)
+## Recent Updates (2026-01-08)
+
+### Sessions Page UX Improvements
+
+**Session Detail Dialog Enhancements** - Complete
+- **Rename from popup**: Edit icon (pencil) next to session title opens rename dialog
+- **Open in Playground**: Play button to resume session in playground with full context
+- **Delete from popup**: Trash button with confirmation dialog (disabled for running sessions)
+- **Consistent close button**: Custom X button matching ghost icon style of other action buttons
+- **Cost display**: Session costs now shown on cards/list items from span data
+
+**Session Cost Tracking** - Complete
+- Backend now populates `total_cost` from span data when session completes
+- Backfill endpoint (`POST /sessions/backfill-costs`) updates existing sessions
+- Cost displayed in session cards, list items, and detail dialog
+
+**View Mode Persistence** - Complete
+- Grid/list view preference saved to localStorage
+- Preference restored on page load
+
+**Files Modified**:
+- `frontend/src/pages/SessionsPage.tsx` - All session dialog and view mode improvements
+- `frontend/src/components/ui/dialog.tsx` - Added `hideCloseButton` prop to DialogContent
+- `backend/app/services/streaming_executor.py` - Cost extraction from spans
+- `backend/app/api/v1/sessions.py` - Backfill costs endpoint
+
+---
+
+## Previous Updates (2026-01-07)
 
 ### Enhanced Tracing System - All Phases Complete
 
@@ -390,7 +418,7 @@ users (5 columns)
 | LoginPage | User authentication |
 | RegisterPage | User registration |
 
-### API Endpoints (80+ Total)
+### API Endpoints (81+ Total)
 
 | Router | Endpoints | Description |
 |--------|-----------|-------------|
@@ -399,7 +427,7 @@ users (5 columns)
 | `/api/v1/agent-types` | 9 | CRUD, clone, recommended tools |
 | `/api/v1/tools` | 8 | CRUD, schema generation |
 | `/api/v1/prompts` | 10 | CRUD, versions, rollback, preview |
-| `/api/v1/sessions` | 13 | CRUD, messages, traces, statistics |
+| `/api/v1/sessions` | 14 | CRUD, messages, traces, statistics, **backfill-costs** |
 | `/api/v1/sessions/.../spans` | 5 | List, tree, stats, traces, detail - **NEW** |
 | `/api/v1/llm-providers` | 8 | CRUD, test connection |
 | `/api/v1/mcp-servers` | 7 | CRUD, test connection, discover tools |

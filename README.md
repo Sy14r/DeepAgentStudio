@@ -192,8 +192,14 @@ A pre-configured, full-featured AI assistant available to all users:
 ### Session & Observability
 - Complete conversation history
 - Step-by-step execution traces
-- Performance metrics (latency, token usage, cost)
-- Session detail dialog with auto-refresh during execution
+- Performance metrics (latency, token usage, cost calculated from spans)
+- **Session detail dialog** with:
+  - Rename sessions inline via edit icon
+  - Resume in Playground with play button
+  - Delete sessions with confirmation
+  - Auto-refresh during execution
+- **View mode persistence**: Grid/list preference saved to localStorage
+- Grid and list view options with filtering by agent and status
 
 ### Trace Explorer (LangSmith/Langfuse-style)
 - **Hierarchical Spans**: Tree view of all LangChain operations (LLM calls, tool invocations, chains, retrievers)
@@ -209,7 +215,7 @@ A pre-configured, full-featured AI assistant available to all users:
 
 ## API Endpoints
 
-**80+ REST endpoints + WebSocket** organized by resource:
+**81+ REST endpoints + WebSocket** organized by resource:
 
 | Router | Endpoints | Description |
 |--------|-----------|-------------|
@@ -218,7 +224,7 @@ A pre-configured, full-featured AI assistant available to all users:
 | `/api/v1/agent-types` | 9 | CRUD, clone, recommended tools |
 | `/api/v1/tools` | 8 | CRUD, schema generation |
 | `/api/v1/prompts` | 10 | CRUD, versions, rollback, preview |
-| `/api/v1/sessions` | 13 | CRUD, messages, traces, statistics |
+| `/api/v1/sessions` | 14 | CRUD, messages, traces, statistics, backfill-costs |
 | `/api/v1/sessions/.../spans` | 5 | Span list, tree, stats, traces, detail |
 | `/api/v1/llm-providers` | 8 | CRUD, test connection |
 | `/api/v1/mcp-servers` | 7 | CRUD, test connection, discover tools |
@@ -350,6 +356,10 @@ Key configuration (see `backend/.env.example`):
   - Real-time WebSocket span streaming during execution
   - Full-page Trace Explorer with tree view, filtering, search, and export
   - Per-span token usage and cost calculation (25+ model pricing)
+- **Session management improvements**:
+  - Rename, delete, resume sessions from detail popup
+  - Cost tracking from span data with backfill support
+  - View mode persistence (grid/list preference)
 
 ### Planned
 - Summary memory (LLM-based summarization)
