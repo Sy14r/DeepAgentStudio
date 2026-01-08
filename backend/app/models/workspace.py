@@ -9,7 +9,7 @@ This module implements workspace management for autonomous agents:
 """
 from enum import Enum
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, JSON, BigInteger
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from sqlalchemy import Enum as SQLEnum
 
@@ -56,7 +56,8 @@ class SessionWorkspace(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     # Relationships
-    session = relationship("Session", backref="workspace", uselist=False)
+    # Use passive_deletes=True to let the database handle cascade delete via ondelete="CASCADE"
+    session = relationship("Session", backref=backref("workspace", uselist=False, passive_deletes=True))
 
     def __repr__(self):
         return f"<SessionWorkspace(id={self.id}, session_id={self.session_id}, path='{self.workspace_path}')>"
@@ -90,7 +91,8 @@ class SessionTask(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    session = relationship("Session", backref="tasks")
+    # Use passive_deletes=True to let the database handle cascade delete via ondelete="CASCADE"
+    session = relationship("Session", backref=backref("tasks", passive_deletes=True))
 
     def __repr__(self):
         return f"<SessionTask(id={self.id}, session_id={self.session_id}, task_number={self.task_number}, status={self.status.value})>"
@@ -120,7 +122,8 @@ class SessionScratchpad(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
     # Relationships
-    session = relationship("Session", backref="scratchpads")
+    # Use passive_deletes=True to let the database handle cascade delete via ondelete="CASCADE"
+    session = relationship("Session", backref=backref("scratchpads", passive_deletes=True))
 
     def __repr__(self):
         return f"<SessionScratchpad(id={self.id}, session_id={self.session_id}, section='{self.section}')>"

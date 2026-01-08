@@ -35,6 +35,7 @@ from .session_recorder import SessionRecorder, create_session_recorder
 from .memory import ConversationMemoryService
 from .workspace_tools import create_workspace_tools, WORKSPACE_TOOL_NAMES
 from .web_tools import create_web_tools, WEB_TOOL_CLASSES
+from .prompt_service import PromptService, PromptNotFoundError, PromptResolutionResult
 from ..encryption import decrypt_api_key
 import json
 import asyncio
@@ -447,10 +448,12 @@ class AgentExecutorService:
 
     def _load_agent(self, agent_id: int) -> Agent:
         """Load agent from database with access validation"""
+        from sqlalchemy import or_
         agent = self.db.query(Agent).filter(
             Agent.id == agent_id,
-            Agent.user_id == self.user_id,
-            Agent.is_active == True
+            Agent.is_active == True,
+            # Allow access to user's own agents OR built-in agents
+            or_(Agent.user_id == self.user_id, Agent.is_builtin == True)
         ).first()
 
         if not agent:
@@ -495,14 +498,85 @@ class AgentExecutorService:
 
         return merged
 
+    def _resolve_system_prompt(
+        self,
+        config: Dict[str, Any],
+        default: str = "You are a helpful assistant."
+    ) -> tuple:
+        """
+        Resolve the system prompt from config.
+
+        Priority:
+        1. If prompt_id is provided, load and render the prompt template
+        2. Otherwise, use system_prompt from config
+        3. Fall back to default
+
+        Args:
+            config: Agent configuration dictionary
+            default: Default prompt if nothing else is configured
+
+        Returns:
+            Tuple of (resolved_system_prompt: str, prompt_version_id: Optional[int])
+        """
+        prompt_id = config.get("prompt_id")
+        prompt_variables = config.get("prompt_variables", {})
+
+        if prompt_id:
+            try:
+                prompt_service = PromptService(self.db)
+                result = prompt_service.resolve_prompt(
+                    prompt_id=prompt_id,
+                    variables=prompt_variables,
+                    user_id=self.user_id,
+                    increment_usage=True
+                )
+                logger.info(f"Resolved prompt_id={prompt_id} (version_id={result.version_id}) for agent execution")
+                return (result.rendered, result.version_id)
+            except PromptNotFoundError as e:
+                logger.warning(f"Prompt {prompt_id} not found, falling back to system_prompt: {e}")
+            except Exception as e:
+                logger.error(f"Error resolving prompt {prompt_id}: {e}")
+
+        # Fall back to system_prompt config or default
+        return (config.get("system_prompt") or default, None)
+
     def _create_llm(self, config: Dict[str, Any]):
         """Create LLM instance from configuration"""
+        from ..models.llm_provider import LLMProviderConfig, LLMProviderType
+
         llm_config = config.get("llm_config", {})
 
+        # If no provider_id, try to find user's provider by type
         if not llm_config.get("provider_id"):
-            raise AgentConfigurationError(
-                "Agent configuration missing provider_id in llm_config"
-            )
+            provider_type_str = llm_config.get("provider")
+            if provider_type_str:
+                # Look up user's provider of this type
+                try:
+                    provider_type = LLMProviderType(provider_type_str.lower())
+                except ValueError:
+                    raise AgentConfigurationError(
+                        f"Unknown provider type: {provider_type_str}"
+                    )
+
+                provider_config = self.db.query(LLMProviderConfig).filter(
+                    LLMProviderConfig.user_id == self.user_id,
+                    LLMProviderConfig.provider_type == provider_type,
+                    LLMProviderConfig.is_active == True
+                ).first()
+
+                if provider_config:
+                    # Merge provider_id into llm_config
+                    llm_config = dict(llm_config)
+                    llm_config["provider_id"] = provider_config.id
+                else:
+                    raise AgentConfigurationError(
+                        f"No active {provider_type_str} provider found. "
+                        f"Please configure an LLM provider in Settings."
+                    )
+            else:
+                raise AgentConfigurationError(
+                    "Agent configuration missing provider_id in llm_config"
+                )
 
         return create_llm_from_agent_config(
             db=self.db,
@@ -694,7 +768,7 @@ class AgentExecutorService:
 
         # Get model name from config
         model_name = config.get("llm_config", {}).get("model", "")
-        system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+        system_prompt, prompt_version_id = self._resolve_system_prompt(config)
 
         # Check if model supports native tool calling
         use_tool_calling = supports_tool_calling(model_name)
@@ -836,7 +910,7 @@ class AgentExecutorService:
             chat_history = []
 
         # Get or create prompt
-        system_prompt = config.get("system_prompt", "")
+        system_prompt, _ = self._resolve_system_prompt(config, default="")
         prompt_template = config.get("prompt_template", REACT_PROMPT_TEMPLATE)
 
         if system_prompt:
@@ -1002,7 +1076,7 @@ class AgentExecutorService:
         if chat_history is None:
             chat_history = []
 
-        system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+        system_prompt, _ = self._resolve_system_prompt(config)
 
         # Build messages list with system prompt, chat history, and current message
         messages = [SystemMessage(content=system_prompt)]

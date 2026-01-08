@@ -5,7 +5,7 @@ Provides WebSocket-based real-time streaming of agent execution events.
 Extends the base AgentExecutorService to add streaming capability while
 maintaining backward compatibility with the REST API.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import asyncio
@@ -37,6 +37,7 @@ from .agent_executor import (
 )
 from .session_recorder import SessionRecorder, create_session_recorder
 from .streaming_callback import StreamingWebSocketCallbackHandler
+from .tracing_callback import create_tracing_callback
 from .memory import ConversationMemoryService
 from .mcp_client import MCPConnectionPool
 from .mcp_tool_wrapper import create_mcp_tools_for_agent, MCPToolWrapper
@@ -44,6 +45,7 @@ from .workspace_tools import create_workspace_tools, WORKSPACE_TOOL_NAMES
 from .web_tools import create_web_tools, WEB_TOOL_CLASSES
 from .tool_wrapper import is_workspace_tool_class, WORKSPACE_TOOL_CLASSES, is_web_tool_class
 from .image_generation_tools import create_image_generation_tools, IMAGE_GENERATION_TOOL_CLASSES
+# Title generation moved to WebSocket handler for immediate execution
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +75,8 @@ class StreamingAgentExecutorService(AgentExecutorService):
         session_id: Optional[int] = None,
         config_override: Optional[Dict[str, Any]] = None,
         timeout_seconds: Optional[int] = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        on_session_created: Optional[Callable[[int], None]] = None
     ) -> ExecutionResult:
         """
         Invoke agent with real-time streaming via WebSocket.
@@ -93,6 +96,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
             session_id: Optional existing session ID to continue
             config_override: Optional configuration overrides
             timeout_seconds: Optional execution timeout
+            on_session_created: Optional callback called with session_id when session is created
 
         Returns:
             ExecutionResult with output and execution details
@@ -131,13 +135,31 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 "agent_name": agent.name
             })
 
+            # Notify caller of session_id so they can start dependent tasks
+            if on_session_created:
+                on_session_created(session.id)
+
             # Record user message
             recorder.record_user_message(input_message)
 
-            # Create streaming callback handler
+            # Note: Title generation is now handled in the WebSocket handler
+            # for immediate execution in parallel with agent invocation
+
+            # Create streaming callback handler (for WebSocket events)
             streaming_callback = StreamingWebSocketCallbackHandler(
                 websocket=websocket,
                 session_id=session.id,
+                loop=loop
+            )
+
+            # Create tracing callback handler (for hierarchical span recording + WebSocket streaming)
+            tracing_callback = create_tracing_callback(
+                db=self.db,
+                session_id=session.id,
+                capture_inputs=True,
+                capture_outputs=True,
+                include_raw_prompts=False,
+                websocket=websocket,
                 loop=loop
             )
 
@@ -241,7 +263,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
                         content=f"Loaded {len(chat_history)} messages from chat history"
                     )
 
-            # Execute with streaming callbacks
+            # Execute with streaming and tracing callbacks
             result = await self._execute_agent_streaming(
                 execution_strategy=agent.agent_type_config.execution_strategy,
                 llm=llm,
@@ -252,20 +274,30 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 timeout_seconds=effective_timeout,
                 chat_history=chat_history,
                 streaming_callback=streaming_callback,
+                tracing_callback=tracing_callback,
                 attachments=attachments
             )
 
             # Calculate metrics
             total_latency = int((time.time() - start_time) * 1000)
 
+            # Get actual token totals from LLM spans (more accurate than word-based estimates)
+            actual_tokens = {"tokens_input": 0, "tokens_output": 0, "total_tokens": 0, "cost_usd": 0.0}
+            if tracing_callback and hasattr(tracing_callback, 'recorder'):
+                actual_tokens = tracing_callback.recorder.get_token_totals()
+
+            # Use actual tokens if available, fall back to result values
+            tokens_input = actual_tokens.get("tokens_input", 0) or result.tokens_input
+            tokens_output = actual_tokens.get("tokens_output", 0) or result.tokens_output
+
             # Send final_answer event with content_blocks for multimodal output
             await self._send_event(websocket, "final_answer", session.id, {
                 "output": result.output,
                 "content_blocks": result.content_blocks or [],
                 "token_usage": {
-                    "input_tokens": result.tokens_input,
-                    "output_tokens": result.tokens_output,
-                    "total_tokens": result.tokens_input + result.tokens_output
+                    "input_tokens": tokens_input,
+                    "output_tokens": tokens_output,
+                    "total_tokens": tokens_input + tokens_output
                 },
                 "latency_ms": total_latency
             })
@@ -275,11 +307,14 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 result.output or "",
                 content_blocks=result.content_blocks
             )
+            # Get cost from spans (actual_tokens includes cost_usd from tracing)
+            cost_usd = actual_tokens.get("cost_usd", 0.0) or None
             recorder.finish_session(
                 status=SessionStatus.COMPLETED,
                 output=result.output,
-                tokens_input=result.tokens_input,
-                tokens_output=result.tokens_output
+                tokens_input=tokens_input,
+                tokens_output=tokens_output,
+                cost=cost_usd
             )
 
             # Send session_end event
@@ -293,8 +328,8 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 output=result.output,
                 content_blocks=result.content_blocks,
                 session_id=session.id,
-                tokens_input=result.tokens_input,
-                tokens_output=result.tokens_output,
+                tokens_input=tokens_input,
+                tokens_output=tokens_output,
                 total_latency_ms=total_latency,
                 steps=result.steps
             )
@@ -406,6 +441,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
         timeout_seconds: int,
         chat_history: List,
         streaming_callback: StreamingWebSocketCallbackHandler,
+        tracing_callback=None,
         attachments: Optional[List[Any]] = None
     ) -> ExecutionResult:
         """
@@ -420,7 +456,12 @@ class StreamingAgentExecutorService(AgentExecutorService):
         def run_agent():
             """Synchronous agent execution function for thread pool."""
             model_name = config.get("llm_config", {}).get("model", "")
-            system_prompt = config.get("system_prompt", "You are a helpful assistant.")
+            system_prompt, _ = self._resolve_system_prompt(config)
+
+            # Build callbacks list (streaming + tracing)
+            callbacks = [streaming_callback]
+            if tracing_callback:
+                callbacks.append(tracing_callback)
 
             # Helper to check for image attachments
             def has_image_attachments():
@@ -451,7 +492,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 # Tool-calling agent for modern models
                 return self._run_tool_calling_agent(
                     llm, tools, input_message, system_prompt,
-                    config, chat_history, streaming_callback, attachments
+                    config, chat_history, callbacks, attachments
                 )
 
             elif has_images and supports_tool_calling(model_name):
@@ -467,7 +508,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 # Text-based ReAct agent for older models (no multimodal support)
                 return self._run_text_react_agent(
                     llm, tools, input_message, config,
-                    chat_history, streaming_callback
+                    chat_history, callbacks
                 )
 
         # Run in thread pool to avoid blocking
@@ -502,7 +543,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
         system_prompt: str,
         config: Dict[str, Any],
         chat_history: List,
-        streaming_callback: StreamingWebSocketCallbackHandler,
+        callbacks: List,
         attachments: Optional[List[Any]] = None
     ) -> Dict[str, Any]:
         """
@@ -533,13 +574,15 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 verbose=True,
                 max_iterations=config.get("max_iterations", 10),
                 return_intermediate_steps=True,
-                callbacks=[streaming_callback]
+                callbacks=callbacks
             )
 
             # Execute with chat history containing the multimodal message
-            result = executor.invoke({
-                "chat_history": full_chat_history
-            })
+            # Pass callbacks in config for proper LLM/Tool span capture
+            result = executor.invoke(
+                {"chat_history": full_chat_history},
+                config={"callbacks": callbacks}
+            )
         else:
             # Original path for text-only messages
             prompt = ChatPromptTemplate.from_messages([
@@ -557,13 +600,14 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 verbose=True,
                 max_iterations=config.get("max_iterations", 10),
                 return_intermediate_steps=True,
-                callbacks=[streaming_callback]
+                callbacks=callbacks
             )
 
-            result = executor.invoke({
-                "input": message_content,
-                "chat_history": chat_history
-            })
+            # Pass callbacks in config for proper LLM/Tool span capture
+            result = executor.invoke(
+                {"input": message_content, "chat_history": chat_history},
+                config={"callbacks": callbacks}
+            )
 
         # Extract steps and content blocks for database recording
         steps = []
@@ -606,12 +650,12 @@ class StreamingAgentExecutorService(AgentExecutorService):
         input_message: str,
         config: Dict[str, Any],
         chat_history: List,
-        streaming_callback: StreamingWebSocketCallbackHandler
+        callbacks: List
     ) -> Dict[str, Any]:
         """
         Run text-based ReAct agent (synchronous, for thread pool).
         """
-        system_prompt = config.get("system_prompt", "")
+        system_prompt, _ = self._resolve_system_prompt(config, default="")
         prompt_template = config.get("prompt_template", REACT_PROMPT_TEMPLATE)
 
         if system_prompt:
@@ -630,7 +674,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
         # Create ReAct agent
         agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
 
-        # Create executor with streaming callback
+        # Create executor with callbacks
         executor = LangChainAgentExecutor(
             agent=agent,
             tools=tools,
@@ -638,11 +682,14 @@ class StreamingAgentExecutorService(AgentExecutorService):
             max_iterations=config.get("max_iterations", 10),
             handle_parsing_errors=True,
             return_intermediate_steps=True,
-            callbacks=[streaming_callback]
+            callbacks=callbacks
         )
 
-        # Execute
-        result = executor.invoke({"input": input_message})
+        # Execute with callbacks in config for proper LLM/Tool span capture
+        result = executor.invoke(
+            {"input": input_message},
+            config={"callbacks": callbacks}
+        )
 
         # Extract steps and content blocks
         steps = []

@@ -11,9 +11,10 @@ DeepAgentStudio provides developers and AI/ML engineers with a complete platform
 - **Tool Library**: 12 built-in tools (code execution, web research, file management, task tracking, image generation) plus custom tool builder
 - **Multimodal Output**: Agents can generate and return images, audio, video, and files inline in chat
 - **MCP Server Integration**: Connect to Model Context Protocol servers to extend agent capabilities
-- **Prompt Management**: Template library with variable substitution, versioning, and A/B testing
+- **Prompt Management**: Full-page editor with version history, side-by-side diff comparison, and rollback
 - **Interactive Playground**: Chat interface with WebSocket streaming and real-time trace visualization
 - **Session Recording**: Complete conversation history, execution traces, and performance metrics
+- **Trace Explorer**: Full-page hierarchical trace visualization with filtering, search, and export (LangSmith/Langfuse-style)
 - **LLM Provider Integration**: Support for OpenAI, Anthropic, Google, Azure OpenAI, Ollama, and LlamaCPP
 
 ## Current Status
@@ -161,6 +162,15 @@ A pre-configured, full-featured AI assistant available to all users:
 - Auto-generated input schemas from function signatures
 - **Unified Tools UI**: Single page for both Python tools and MCP servers
 
+### Prompt Management
+- **Full-page editor**: Dedicated `PromptEditorPage` with split-view layout
+- **Version history panel**: View all versions with metadata (date, usage count, variables)
+- **Version comparison**: Side-by-side diff showing template changes between versions
+- **Rollback support**: Restore any previous version with one click
+- **Variable detection**: Automatic `{variable}` syntax detection with preview
+- **Template preview**: Live rendering with variable substitution
+- **A/B testing support**: Mark versions active/inactive for testing
+
 ### MCP Server Integration
 - Connect to Model Context Protocol (MCP) servers
 - Support for stdio (local subprocess) and SSE (HTTP) transports
@@ -185,9 +195,21 @@ A pre-configured, full-featured AI assistant available to all users:
 - Performance metrics (latency, token usage, cost)
 - Session detail dialog with auto-refresh during execution
 
+### Trace Explorer (LangSmith/Langfuse-style)
+- **Hierarchical Spans**: Tree view of all LangChain operations (LLM calls, tool invocations, chains, retrievers)
+- **Real-time Updates**: WebSocket streaming of spans during execution with live indicators
+- **11 Span Types**: agent, chain, llm, tool, retriever, embedding, parser, prompt, memory, thought, error
+- **Detailed Metrics**: Per-span token usage, cost calculation (25+ model pricing), timing
+- **Full-Page Explorer**: Dedicated `/sessions/:id/trace` route with resizable split view
+- **Filtering & Search**: Filter by span type, status, duration; text search with match highlighting
+- **Statistics Dashboard**: Token breakdown, cost summary, span count by type
+- **Export Options**: JSON (hierarchical) and CSV (flattened) export
+- **Keyboard Navigation**: Cmd/Ctrl+F for search, arrow keys for tree navigation
+- **Deep Linking**: URL params for selected span, shareable links
+
 ## API Endpoints
 
-**70+ REST endpoints + WebSocket** organized by resource:
+**80+ REST endpoints + WebSocket** organized by resource:
 
 | Router | Endpoints | Description |
 |--------|-----------|-------------|
@@ -197,9 +219,10 @@ A pre-configured, full-featured AI assistant available to all users:
 | `/api/v1/tools` | 8 | CRUD, schema generation |
 | `/api/v1/prompts` | 10 | CRUD, versions, rollback, preview |
 | `/api/v1/sessions` | 13 | CRUD, messages, traces, statistics |
+| `/api/v1/sessions/.../spans` | 5 | Span list, tree, stats, traces, detail |
 | `/api/v1/llm-providers` | 8 | CRUD, test connection |
 | `/api/v1/mcp-servers` | 7 | CRUD, test connection, discover tools |
-| `/api/v1/ws` | 1 | WebSocket streaming for real-time agent execution |
+| `/api/v1/ws` | 1 | WebSocket streaming + real-time span events |
 
 Full documentation available at http://localhost:8000/docs
 
@@ -211,20 +234,20 @@ Full documentation available at http://localhost:8000/docs
 DeepAgentStudio/
 ├── backend/
 │   ├── app/
-│   │   ├── api/v1/        # API route handlers
+│   │   ├── api/v1/        # API route handlers (incl. spans.py)
 │   │   ├── models/        # SQLAlchemy models
-│   │   ├── schemas/       # Pydantic schemas
-│   │   ├── services/      # Business logic
+│   │   ├── schemas/       # Pydantic schemas (incl. span.py)
+│   │   ├── services/      # Business logic (incl. tracing_callback.py, span_*.py)
 │   │   ├── llm/           # LLM client wrappers
-│   │   └── utils/         # Utilities (tools, workspace)
-│   ├── alembic/           # Database migrations (11 total)
+│   │   └── utils/         # Utilities (tools, workspace, model_pricing)
+│   ├── alembic/           # Database migrations (14 total)
 │   └── tests/             # pytest test files
 ├── frontend/
 │   ├── src/
-│   │   ├── api/           # API client and hooks
-│   │   ├── components/    # React components
-│   │   ├── pages/         # Route pages (14 total)
-│   │   └── stores/        # Zustand stores
+│   │   ├── api/           # API client and hooks (incl. useSpans.ts)
+│   │   ├── components/    # React components (incl. traces/ directory)
+│   │   ├── pages/         # Route pages (16 total incl. TraceExplorerPage)
+│   │   └── stores/        # Zustand stores (incl. spanStore.ts)
 │   └── tests/             # Vitest test files
 ├── docker-compose.yml
 ├── SPEC.md                # Product specification
@@ -311,7 +334,7 @@ Key configuration (see `backend/.env.example`):
 - Full React frontend with CRUD interfaces
 - Playground with WebSocket streaming
 - Memory integration (buffer memory)
-- Full-page editors (Agent, Tool, MCP Server)
+- Full-page editors (Agent, Tool, MCP Server, Prompt)
 - 12 built-in tools (code, API, workspace, web, image generation)
 - Built-in Power Agent
 - Agent cloning
@@ -320,6 +343,13 @@ Key configuration (see `backend/.env.example`):
 - **Multimodal image input** for vision-capable models
 - **Multimodal output** (images, audio, video, files) with content block rendering
 - **DALL-E image generation** tool with inline display
+- **Prompt version management** with history, comparison, and rollback
+- **Enhanced Tracing System** (LangSmith/Langfuse-style) with:
+  - Hierarchical span capture via LangChain callbacks
+  - 11 span types (agent, chain, llm, tool, retriever, embedding, parser, prompt, memory, thought, error)
+  - Real-time WebSocket span streaming during execution
+  - Full-page Trace Explorer with tree view, filtering, search, and export
+  - Per-span token usage and cost calculation (25+ model pricing)
 
 ### Planned
 - Summary memory (LLM-based summarization)
@@ -339,6 +369,7 @@ Key configuration (see `backend/.env.example`):
 | [FRONTEND-SPEC.md](./FRONTEND-SPEC.md) | Frontend implementation details |
 | [TESTING.md](./TESTING.md) | Testing guide |
 | [ADVANCED_AGENT_TOOLKIT_SPEC.md](./ADVANCED_AGENT_TOOLKIT_SPEC.md) | Workspace tools specification |
+| [ENHANCED_TRACING_SPEC.md](./ENHANCED_TRACING_SPEC.md) | Hierarchical tracing system specification |
 
 ## License
 

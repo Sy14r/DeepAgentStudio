@@ -79,6 +79,19 @@ from .session import (
     InvokeResponse,
     TokenUsage,
 )
+from .span import (
+    SpanType,
+    SpanStatus,
+    SpanBase,
+    SpanCreate,
+    SpanUpdate,
+    SpanResponse,
+    SpanTreeNode,
+    SpanTreeResponse,
+    SpanStatsResponse,
+    SpanListResponse,
+    SpanFilterParams,
+)
 
 __all__ = [
     # User schemas
@@ -164,4 +177,16 @@ __all__ = [
     "InvokeRequest",
     "InvokeResponse",
     "TokenUsage",
+    # Span schemas (Enhanced Tracing)
+    "SpanType",
+    "SpanStatus",
+    "SpanBase",
+    "SpanCreate",
+    "SpanUpdate",
+    "SpanResponse",
+    "SpanTreeNode",
+    "SpanTreeResponse",
+    "SpanStatsResponse",
+    "SpanListResponse",
+    "SpanFilterParams",
 ]

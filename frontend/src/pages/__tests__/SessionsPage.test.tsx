@@ -58,7 +58,7 @@ const mockStatistics = {
   average_latency_ms: 3000,
   total_tokens_used: 350,
   total_cost: 0.0015,
-  success_rate: 0.5,
+  success_rate: 50, // API returns percentage (0-100), not decimal
 };
 
 function renderWithProviders(component: React.ReactNode) {

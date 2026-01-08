@@ -7,6 +7,8 @@ enabling real-time updates in the frontend as tools are called and return.
 from typing import Optional
 import logging
 import json
+import asyncio
+from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from sqlalchemy.orm import Session
@@ -14,7 +16,9 @@ from sqlalchemy.orm import Session
 from ...database import SessionLocal
 from ...security import decode_access_token
 from ...models.user import User
+from ...models.session import Session as SessionModel
 from ...services.streaming_executor import StreamingAgentExecutorService
+from ...services.title_generator import generate_title_async
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -127,7 +131,66 @@ async def websocket_agent_stream(
                         })
                         continue
 
-                    # Execute with streaming
+                    # For new sessions, start title generation IMMEDIATELY in parallel
+                    # with agent execution - this uses a system-level LLM provider
+                    is_new_session = session_id is None
+                    title_task = None
+                    session_id_event = asyncio.Event()
+                    session_id_holder = [None]  # Use list to allow modification in nested function
+
+                    if is_new_session:
+                        # Start generating title right away - runs concurrently with agent
+                        title_task = asyncio.create_task(
+                            generate_title_async(input_message)
+                        )
+                        logger.debug(f"Started title generation task for new session")
+
+                        # Create task that sends title update as soon as BOTH are ready:
+                        # 1. Title is generated (fast, ~1-2 seconds)
+                        # 2. Session ID is available (early in agent execution)
+                        async def send_title_when_ready():
+                            try:
+                                # Wait for title generation to complete
+                                new_title = await title_task
+
+                                # Wait for session_id to be available
+                                await session_id_event.wait()
+                                created_session_id = session_id_holder[0]
+
+                                if created_session_id:
+                                    # Update session in database
+                                    session_obj = db.query(SessionModel).filter(
+                                        SessionModel.id == created_session_id
+                                    ).first()
+                                    if session_obj:
+                                        session_obj.title = new_title
+                                        db.commit()
+                                        logger.info(f"Updated session {created_session_id} title to: '{new_title}'")
+
+                                        # Send title update to frontend IMMEDIATELY
+                                        await websocket.send_json({
+                                            "type": "session_title_update",
+                                            "session_id": created_session_id,
+                                            "timestamp": datetime.utcnow().isoformat() + "Z",
+                                            "payload": {
+                                                "title": new_title
+                                            }
+                                        })
+                            except asyncio.CancelledError:
+                                logger.debug("Title generation task was cancelled")
+                            except Exception as e:
+                                logger.warning(f"Title update failed: {e}")
+
+                        # Fire and forget - will send title as soon as both are ready
+                        asyncio.create_task(send_title_when_ready())
+
+                    # Callback to notify when session is created
+                    def on_session_created(new_session_id: int):
+                        session_id_holder[0] = new_session_id
+                        session_id_event.set()
+                        logger.debug(f"Session {new_session_id} created, title update can proceed")
+
+                    # Execute with streaming (runs in parallel with title generation)
                     try:
                         result = await service.invoke_streaming(
                             agent_id=agent_id,
@@ -136,7 +199,8 @@ async def websocket_agent_stream(
                             session_id=session_id,
                             config_override=config_override,
                             timeout_seconds=timeout,
-                            attachments=attachments
+                            attachments=attachments,
+                            on_session_created=on_session_created if is_new_session else None
                         )
 
                         logger.info(
@@ -146,6 +210,9 @@ async def websocket_agent_stream(
 
                     except Exception as e:
                         logger.exception(f"Streaming execution error: {e}")
+                        # Cancel title task if agent execution failed
+                        if title_task and not title_task.done():
+                            title_task.cancel()
                         await websocket.send_json({
                             "type": "error",
                             "session_id": 0,

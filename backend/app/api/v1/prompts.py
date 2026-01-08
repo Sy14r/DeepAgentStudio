@@ -440,3 +440,62 @@ def preview_prompt(
         variables_found=variables_found,
         variables_missing=variables_missing
     )
+
+
+# Analytics Endpoints
+
+@router.get("/{prompt_id}/analytics")
+def get_prompt_analytics(
+    prompt_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get usage analytics for a prompt.
+
+    Returns:
+    - Total usage count across all versions
+    - Usage by version
+    - Version history with usage counts
+    """
+    # Verify prompt ownership
+    prompt = db.query(Prompt).filter(
+        Prompt.id == prompt_id,
+        Prompt.user_id == current_user.id
+    ).first()
+
+    if not prompt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Prompt not found"
+        )
+
+    # Get all versions with usage counts
+    versions = db.query(PromptVersion).filter(
+        PromptVersion.prompt_id == prompt_id
+    ).order_by(PromptVersion.version_number.desc()).all()
+
+    # Calculate totals
+    total_usage = sum(v.usage_count for v in versions)
+
+    # Build version usage breakdown
+    version_usage = [
+        {
+            "version_id": v.id,
+            "version_number": v.version_number,
+            "usage_count": v.usage_count,
+            "is_active": v.is_active,
+            "is_current": v.id == prompt.current_version_id,
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+        }
+        for v in versions
+    ]
+
+    return {
+        "prompt_id": prompt_id,
+        "prompt_name": prompt.name,
+        "total_usage_count": total_usage,
+        "total_versions": len(versions),
+        "current_version_id": prompt.current_version_id,
+        "version_usage": version_usage,
+    }

@@ -162,6 +162,7 @@ export interface AgentConfig {
   memory_config?: MemoryConfig;
   tool_ids: number[];
   prompt_id: number | null;
+  prompt_variables?: Record<string, string>;
   system_prompt: string | null;
   timeout_seconds?: number;
 }
@@ -259,7 +260,7 @@ export interface ToolCreateRequest {
 }
 
 // Prompt types
-export type PromptUseCase = 'research' | 'coding' | 'analysis' | 'writing' | 'general' | 'custom';
+export type PromptUseCase = 'research' | 'coding' | 'analysis' | 'writing' | 'conversation' | 'planning' | 'other';
 export type MessageType = 'system' | 'user' | 'assistant';
 
 export interface Prompt {
@@ -268,7 +269,6 @@ export interface Prompt {
   name: string;
   description: string | null;
   use_case: PromptUseCase;
-  message_type: MessageType;
   current_version_id: number | null;
   tags: string[];
   is_active: boolean;
@@ -280,10 +280,12 @@ export interface PromptVersion {
   id: number;
   prompt_id: number;
   version_number: number;
-  content: string;
+  template: string;
   variables: string[];
+  message_type: MessageType;
   is_active: boolean;
   usage_count: number;
+  created_by: number | null;
   created_at: string;
 }
 
@@ -597,4 +599,116 @@ export interface StrategyTemplatesResponse {
 export interface StrategyTemplateResponse {
   name: string;
   code: string;
+}
+
+// ============================================================================
+// Span Types (Enhanced Tracing System - Phase 4)
+// ============================================================================
+
+export type SpanType =
+  | 'agent'      // Top-level agent execution
+  | 'chain'      // Chain/sequence execution
+  | 'llm'        // LLM API call
+  | 'tool'       // Tool invocation
+  | 'retriever'  // Document retrieval
+  | 'embedding'  // Embedding generation
+  | 'parser'     // Output parsing
+  | 'prompt'     // Prompt formatting
+  | 'memory'     // Memory read/write
+  | 'thought'    // Agent reasoning
+  | 'error';     // Error occurrence
+
+export type SpanStatus = 'running' | 'success' | 'error';
+
+export interface Span {
+  id: number;
+  session_id: number;
+  trace_id: string;
+  parent_span_id: number | null;
+  span_type: SpanType;
+  name: string;
+  span_order: number;
+  depth: number;
+
+  // Timing
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+
+  // Status
+  status: SpanStatus;
+  status_message: string | null;
+
+  // Data
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
+
+  // LLM-specific
+  model_name: string | null;
+  model_provider: string | null;
+  model_parameters: Record<string, unknown> | null;
+  tokens_input: number | null;
+  tokens_output: number | null;
+  tokens_total: number | null;
+  cost_usd: number | null;
+
+  // Tool-specific
+  tool_name: string | null;
+
+  // Error details
+  error_type: string | null;
+  error_message: string | null;
+  error_stack: string | null;
+
+  // Metadata
+  tags: string[] | null;
+  meta: Record<string, unknown>;
+
+  created_at: string;
+}
+
+export interface SpanTreeNode {
+  id: number;
+  span_type: SpanType;
+  name: string;
+  status: SpanStatus;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+  depth: number;
+
+  // Quick stats for tree view
+  tokens_total: number | null;
+  cost_usd: number | null;
+  tool_name: string | null;
+  error_message: string | null;
+
+  // Children (recursive)
+  children: SpanTreeNode[];
+}
+
+export interface SpanStats {
+  total_spans: number;
+  total_duration_ms: number | null;
+  total_tokens: number;
+  total_tokens_input: number;
+  total_tokens_output: number;
+  total_cost_usd: number;
+  span_count_by_type: Record<string, number>;
+  span_count_by_status: Record<string, number>;
+  error_count: number;
+  average_duration_ms: number | null;
+}
+
+export interface SpanTreeResponse {
+  trace_id: string;
+  root_span: SpanTreeNode | null;
+  stats: SpanStats;
+}
+
+export interface SpanListResponse {
+  spans: Span[];
+  total: number;
+  page: number;
+  page_size: number;
 }

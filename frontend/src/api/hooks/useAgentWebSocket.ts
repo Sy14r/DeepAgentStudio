@@ -2,15 +2,18 @@
  * WebSocket hook for real-time agent execution streaming.
  *
  * Connects to the backend WebSocket endpoint and streams execution events
- * (tool calls, tool results, errors, final answers) in real-time.
+ * (tool calls, tool results, errors, final answers, span events) in real-time.
+ *
+ * Implements Phase 3 of ENHANCED_TRACING_SPEC.md for span events.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '@/stores/authStore';
+import { useSpanStore, type SpanType, type SpanStatus, type LiveSpan } from '@/stores/spanStore';
 import type { ContentBlock } from '../types';
 
 // WebSocket Event Types
 export interface WSEvent {
-  type: 'session_start' | 'tool_call' | 'tool_result' | 'error' | 'final_answer' | 'session_end' | 'pong';
+  type: 'session_start' | 'tool_call' | 'tool_result' | 'error' | 'final_answer' | 'session_end' | 'pong' | 'span_start' | 'span_end' | 'session_title_update';
   session_id: number;
   timestamp: string;
   payload: WSPayload;
@@ -22,7 +25,10 @@ export type WSPayload =
   | ToolResultPayload
   | ErrorPayload
   | FinalAnswerPayload
-  | SessionEndPayload;
+  | SessionEndPayload
+  | SpanStartPayload
+  | SpanEndPayload
+  | SessionTitleUpdatePayload;
 
 export interface SessionStartPayload {
   agent_id: number;
@@ -64,6 +70,33 @@ export interface SessionEndPayload {
   total_steps: number;
 }
 
+export interface SessionTitleUpdatePayload {
+  title: string;
+}
+
+// Span event payloads (Phase 3)
+export interface SpanStartPayload {
+  span_id: number;
+  trace_id: string;
+  parent_span_id: number | null;
+  span_type: SpanType;
+  name: string;
+  depth: number;
+  input?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SpanEndPayload {
+  span_id: number;
+  status: SpanStatus;
+  duration_ms?: number;
+  output?: Record<string, unknown>;
+  tokens_input?: number;
+  tokens_output?: number;
+  cost_usd?: number;
+  error_message?: string;
+}
+
 // Hook Options
 export interface UseAgentWebSocketOptions {
   agentId: number;
@@ -73,9 +106,13 @@ export interface UseAgentWebSocketOptions {
   onFinalAnswer?: (payload: FinalAnswerPayload, sessionId: number) => void;
   onError?: (payload: ErrorPayload, sessionId: number) => void;
   onSessionEnd?: (payload: SessionEndPayload, sessionId: number) => void;
+  onSessionTitleUpdate?: (payload: SessionTitleUpdatePayload, sessionId: number) => void;
+  onSpanStart?: (payload: SpanStartPayload, sessionId: number) => void;
+  onSpanEnd?: (payload: SpanEndPayload, sessionId: number) => void;
   onConnectionChange?: (connected: boolean) => void;
   autoReconnect?: boolean;
   reconnectDelay?: number;
+  enableSpanTracking?: boolean;  // Auto-update spanStore on span events
 }
 
 // Attachment type for WebSocket
@@ -121,10 +158,17 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
     onFinalAnswer,
     onError,
     onSessionEnd,
+    onSessionTitleUpdate,
+    onSpanStart,
+    onSpanEnd,
     onConnectionChange,
     autoReconnect = true,
     reconnectDelay = 3000,
+    enableSpanTracking = true,  // Auto-track spans by default
   } = options;
+
+  // Get span store actions for auto-tracking
+  const spanStore = useSpanStore();
 
   const [isConnected, setIsConnected] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -153,6 +197,10 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
       switch (data.type) {
         case 'session_start':
           setIsExecuting(true);
+          // Start span recording for this session
+          if (enableSpanTracking) {
+            spanStore.startRecording(data.session_id);
+          }
           onSessionStart?.(data.payload as SessionStartPayload, data.session_id);
           break;
 
@@ -176,8 +224,55 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
 
         case 'session_end':
           setIsExecuting(false);
+          // Stop span recording
+          if (enableSpanTracking) {
+            spanStore.stopRecording();
+          }
           onSessionEnd?.(data.payload as SessionEndPayload, data.session_id);
           break;
+
+        case 'session_title_update':
+          onSessionTitleUpdate?.(data.payload as SessionTitleUpdatePayload, data.session_id);
+          break;
+
+        case 'span_start': {
+          const spanPayload = data.payload as SpanStartPayload;
+          // Add span to store
+          if (enableSpanTracking) {
+            const newSpan: LiveSpan = {
+              span_id: spanPayload.span_id,
+              trace_id: spanPayload.trace_id,
+              parent_span_id: spanPayload.parent_span_id,
+              span_type: spanPayload.span_type,
+              name: spanPayload.name,
+              depth: spanPayload.depth,
+              status: 'running',
+              started_at: data.timestamp,
+              input: spanPayload.input,
+              metadata: spanPayload.metadata,
+            };
+            spanStore.addSpan(newSpan);
+          }
+          onSpanStart?.(spanPayload, data.session_id);
+          break;
+        }
+
+        case 'span_end': {
+          const spanPayload = data.payload as SpanEndPayload;
+          // Complete span in store
+          if (enableSpanTracking) {
+            spanStore.completeSpan(spanPayload.span_id, spanPayload.status, {
+              duration_ms: spanPayload.duration_ms,
+              output: spanPayload.output,
+              tokens_input: spanPayload.tokens_input,
+              tokens_output: spanPayload.tokens_output,
+              cost_usd: spanPayload.cost_usd,
+              error_message: spanPayload.error_message,
+            });
+          }
+          onSpanEnd?.(spanPayload, data.session_id);
+          break;
+        }
 
         case 'pong':
           // Heartbeat response - no action needed
@@ -189,7 +284,7 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
     } catch (err) {
       console.error('Failed to parse WebSocket message:', err);
     }
-  }, [onSessionStart, onToolCall, onToolResult, onFinalAnswer, onError, onSessionEnd]);
+  }, [onSessionStart, onToolCall, onToolResult, onFinalAnswer, onError, onSessionEnd, onSessionTitleUpdate, onSpanStart, onSpanEnd, enableSpanTracking, spanStore]);
 
   // Connect to WebSocket
   const connect = useCallback(() => {

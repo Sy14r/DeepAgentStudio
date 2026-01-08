@@ -72,7 +72,7 @@ async def health_check():
 
 
 # API routers
-from .api.v1 import auth, agents, agent_types, tools, prompts, sessions, llm_providers, websocket, mcp_servers
+from .api.v1 import auth, agents, agent_types, tools, prompts, sessions, llm_providers, websocket, mcp_servers, spans
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
@@ -80,6 +80,7 @@ app.include_router(agent_types.router, prefix="/api/v1/agent-types", tags=["agen
 app.include_router(tools.router, prefix="/api/v1/tools", tags=["tools"])
 app.include_router(prompts.router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(sessions.router, prefix="/api/v1/sessions", tags=["sessions"])
+app.include_router(spans.router, prefix="/api/v1/sessions", tags=["spans"])
 app.include_router(llm_providers.router, prefix="/api/v1/llm-providers", tags=["llm-providers"])
 app.include_router(mcp_servers.router, prefix="/api/v1/mcp-servers", tags=["mcp-servers"])
 app.include_router(websocket.router, prefix="/api/v1/ws", tags=["websocket"])

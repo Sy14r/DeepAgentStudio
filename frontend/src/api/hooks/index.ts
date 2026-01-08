@@ -53,6 +53,16 @@ export {
   useCreatePrompt,
   useUpdatePrompt,
   useDeletePrompt,
+  useCreatePromptVersion,
+  usePromptVersions,
+  useRollbackPrompt,
+} from './usePrompts';
+export type {
+  PromptCreateRequest,
+  PromptUpdateRequest,
+  PromptVersionCreateRequest,
+  PromptVersionConfig,
+  PromptVersionsResponse,
 } from './usePrompts';
 export { useInvokeAgent } from './useInvoke';
 export { useSessions, useSession, useSessionStatistics, useSessionMessages, useSessionTraces, useUpdateSession, useDeleteSession } from './useSessions';
@@ -67,4 +77,7 @@ export type {
   ErrorPayload,
   FinalAnswerPayload,
   SessionEndPayload,
+  SessionTitleUpdatePayload,
+  SpanStartPayload,
+  SpanEndPayload,
 } from './useAgentWebSocket';

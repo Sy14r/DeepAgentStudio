@@ -28,6 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DeleteConfirmDialog,
 } from '@/components/ui';
 import {
   History,
@@ -52,6 +53,8 @@ import {
   MoreVertical,
   Pencil,
   Trash2,
+  GitBranch,
+  X,
 } from 'lucide-react';
 import { useSessions, useSession, useSessionStatistics, useAgents, useUpdateSession, useDeleteSession, getErrorMessage } from '@/api/hooks';
 import { Session, SessionStatus, TraceStep, Message, TraceStepType } from '@/api/types';
@@ -100,11 +103,12 @@ interface SessionCardProps {
   onView: (id: number) => void;
   onResume: (session: Session) => void;
   onRename: (session: Session) => void;
-  onDelete: (id: number) => void;
+  onDelete: (session: Session) => void;
+  onExplore: (id: number) => void;
   agentName?: string;
 }
 
-function SessionCard({ session, onView, onResume, onRename, onDelete, agentName }: SessionCardProps) {
+function SessionCard({ session, onView, onResume, onRename, onDelete, onExplore, agentName }: SessionCardProps) {
   return (
     <Card className="group hover:border-primary/50 transition-colors">
       <CardHeader className="pb-3">
@@ -126,6 +130,10 @@ function SessionCard({ session, onView, onResume, onRename, onDelete, agentName 
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => onExplore(session.id)}>
+                  <GitBranch className="mr-2 h-4 w-4" />
+                  Trace Explorer
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onRename(session)}>
                   <Pencil className="mr-2 h-4 w-4" />
                   Rename
@@ -133,7 +141,8 @@ function SessionCard({ session, onView, onResume, onRename, onDelete, agentName 
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-destructive"
-                  onClick={() => onDelete(session.id)}
+                  onClick={() => onDelete(session)}
+                  disabled={session.status === 'running' || session.status === 'pending'}
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Delete
@@ -183,7 +192,7 @@ function SessionCard({ session, onView, onResume, onRename, onDelete, agentName 
             onClick={() => onView(session.id)}
           >
             <Eye className="h-4 w-4 mr-2" />
-            View Details
+            View
           </Button>
           {session.agent_id && (
             <Button
@@ -208,11 +217,12 @@ interface SessionListItemProps {
   onView: (id: number) => void;
   onResume: (session: Session) => void;
   onRename: (session: Session) => void;
-  onDelete: (id: number) => void;
+  onDelete: (session: Session) => void;
+  onExplore: (id: number) => void;
   agentName?: string;
 }
 
-function SessionListItem({ session, onView, onResume, onRename, onDelete, agentName }: SessionListItemProps) {
+function SessionListItem({ session, onView, onResume, onRename, onDelete, onExplore, agentName }: SessionListItemProps) {
   return (
     <div className="flex items-center justify-between p-4 border rounded-lg hover:border-primary/50 transition-colors">
       <div className="flex items-center gap-4 flex-1 min-w-0">
@@ -269,6 +279,10 @@ function SessionListItem({ session, onView, onResume, onRename, onDelete, agentN
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => onExplore(session.id)}>
+              <GitBranch className="mr-2 h-4 w-4" />
+              Trace Explorer
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onRename(session)}>
               <Pencil className="mr-2 h-4 w-4" />
               Rename
@@ -276,7 +290,8 @@ function SessionListItem({ session, onView, onResume, onRename, onDelete, agentN
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive"
-              onClick={() => onDelete(session.id)}
+              onClick={() => onDelete(session)}
+              disabled={session.status === 'running' || session.status === 'pending'}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
@@ -417,13 +432,54 @@ interface SessionDetailDialogProps {
   sessionId: number | null;
   open: boolean;
   onClose: () => void;
+  onExplore: (sessionId: number) => void;
 }
 
-function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailDialogProps) {
+function SessionDetailDialog({ sessionId, open, onClose, onExplore }: SessionDetailDialogProps) {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'messages' | 'trace'>('messages');
   const { data: session, isLoading, error } = useSession(sessionId ?? undefined);
+  const deleteSession = useDeleteSession();
+  const updateSession = useUpdateSession();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollIndicator, setShowScrollIndicator] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+
+  const handleOpenInPlayground = () => {
+    if (session?.agent_id) {
+      // Navigate directly - don't call onClose() as it navigates to /sessions
+      navigate(`/playground/${session.agent_id}/session/${session.id}`);
+    }
+  };
+
+  // Check if session can be deleted (not currently running)
+  const canDelete = session && session.status !== 'running' && session.status !== 'pending';
+
+  const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!sessionId) return;
+    deleteSession.mutate(sessionId, {
+      onSuccess: () => {
+        setShowDeleteConfirm(false);
+        onClose();
+      },
+    });
+  };
+
+  const handleSaveRename = (id: number, newTitle: string) => {
+    updateSession.mutate(
+      { sessionId: id, data: { title: newTitle } },
+      {
+        onSuccess: () => {
+          setShowRenameDialog(false);
+        },
+      }
+    );
+  };
 
   // Check if content overflows and update scroll indicator
   useEffect(() => {
@@ -448,10 +504,64 @@ function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailDialogPr
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="max-w-4xl h-[85vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-4xl h-[85vh] overflow-hidden flex flex-col" hideCloseButton>
+        {/* Action buttons positioned absolutely in top-right corner */}
+        <div className="absolute right-4 top-4 flex items-center gap-1">
+          {session?.agent_id && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-primary"
+              onClick={handleOpenInPlayground}
+              aria-label="Open in Playground"
+              title="Open in Playground"
+            >
+              <Play className="h-4 w-4" />
+            </Button>
+          )}
+          {session && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+              onClick={handleDelete}
+              disabled={!canDelete || deleteSession.isPending}
+              aria-label={canDelete ? 'Delete session' : 'Cannot delete running session'}
+              title={canDelete ? 'Delete session' : 'Cannot delete running session'}
+            >
+              {deleteSession.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
         <DialogHeader>
-          <DialogTitle>
-            {session?.title || `Session #${sessionId}`}
+          <DialogTitle className="flex items-center gap-2 pr-32">
+            <span>{session?.title || `Session #${sessionId}`}</span>
+            {session && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-primary"
+                onClick={() => setShowRenameDialog(true)}
+                aria-label="Rename session"
+                title="Rename session"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            )}
           </DialogTitle>
         </DialogHeader>
 
@@ -510,8 +620,18 @@ function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailDialogPr
                 onClick={() => setActiveTab('trace')}
               >
                 <Zap className="h-4 w-4 mr-2" />
-                Trace ({session.trace_steps?.length || 0})
+                Simple Trace ({session.trace_steps?.length || 0})
               </Button>
+              {sessionId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onExplore(sessionId)}
+                >
+                  <GitBranch className="h-4 w-4 mr-2" />
+                  Advanced Trace
+                </Button>
+              )}
             </div>
 
             {/* Content area with scroll indicator */}
@@ -570,6 +690,25 @@ function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailDialogPr
           </div>
         ) : null}
       </DialogContent>
+
+      {/* Delete Confirmation Dialog */}
+      <DeleteConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        itemName={session?.title || `Session #${sessionId}`}
+        itemType="session"
+        onConfirm={handleConfirmDelete}
+        isLoading={deleteSession.isPending}
+      />
+
+      {/* Rename Dialog */}
+      <RenameDialog
+        session={session || null}
+        open={showRenameDialog}
+        onClose={() => setShowRenameDialog(false)}
+        onSave={handleSaveRename}
+        isPending={updateSession.isPending}
+      />
     </Dialog>
   );
 }
@@ -634,6 +773,8 @@ function RenameDialog({ session, open, onClose, onSave, isPending }: RenameDialo
   );
 }
 
+const SESSIONS_VIEW_MODE_KEY = 'sessions-view-mode';
+
 export function SessionsPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -641,11 +782,22 @@ export function SessionsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [agentFilter, setAgentFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
+    const saved = localStorage.getItem(SESSIONS_VIEW_MODE_KEY);
+    return saved === 'list' ? 'list' : 'grid';
+  });
+
+  // Persist view mode preference
+  const handleViewModeChange = (mode: 'grid' | 'list') => {
+    setViewMode(mode);
+    localStorage.setItem(SESSIONS_VIEW_MODE_KEY, mode);
+  };
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(
     id ? parseInt(id) : null
   );
   const [renameSession, setRenameSession] = useState<Session | null>(null);
+  const [deleteSessionId, setDeleteSessionId] = useState<number | null>(null);
+  const [deleteSessionTitle, setDeleteSessionTitle] = useState<string | undefined>(undefined);
 
   // Sync URL param with state - handles navigation from sidebar while already on sessions page
   useEffect(() => {
@@ -706,10 +858,24 @@ export function SessionsPage() {
     );
   };
 
-  const handleDelete = (sessionId: number) => {
-    if (confirm('Are you sure you want to delete this session? This action cannot be undone.')) {
-      deleteSession.mutate(sessionId);
+  const handleDelete = (session: Session) => {
+    setDeleteSessionId(session.id);
+    setDeleteSessionTitle(session.title || `Session #${session.id}`);
+  };
+
+  const handleConfirmDelete = () => {
+    if (deleteSessionId) {
+      deleteSession.mutate(deleteSessionId, {
+        onSuccess: () => {
+          setDeleteSessionId(null);
+          setDeleteSessionTitle(undefined);
+        },
+      });
     }
+  };
+
+  const handleExplore = (sessionId: number) => {
+    navigate(`/sessions/${sessionId}/trace`);
   };
 
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
@@ -749,7 +915,7 @@ export function SessionsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold">
-                {(stats.success_rate * 100).toFixed(1)}%
+                {stats.success_rate.toFixed(1)}%
               </p>
             </CardContent>
           </Card>
@@ -832,7 +998,7 @@ export function SessionsPage() {
           <Button
             variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
             size="sm"
-            onClick={() => setViewMode('grid')}
+            onClick={() => handleViewModeChange('grid')}
             className="h-8 w-8 p-0"
           >
             <LayoutGrid className="h-4 w-4" />
@@ -840,7 +1006,7 @@ export function SessionsPage() {
           <Button
             variant={viewMode === 'list' ? 'secondary' : 'ghost'}
             size="sm"
-            onClick={() => setViewMode('list')}
+            onClick={() => handleViewModeChange('list')}
             className="h-8 w-8 p-0"
           >
             <List className="h-4 w-4" />
@@ -897,6 +1063,7 @@ export function SessionsPage() {
               onResume={handleResume}
               onRename={handleRename}
               onDelete={handleDelete}
+              onExplore={handleExplore}
               agentName={session.agent_id ? agentMap.get(session.agent_id) : undefined}
             />
           ))}
@@ -913,6 +1080,7 @@ export function SessionsPage() {
               onResume={handleResume}
               onRename={handleRename}
               onDelete={handleDelete}
+              onExplore={handleExplore}
               agentName={session.agent_id ? agentMap.get(session.agent_id) : undefined}
             />
           ))}
@@ -951,6 +1119,7 @@ export function SessionsPage() {
         sessionId={selectedSessionId}
         open={!!selectedSessionId}
         onClose={handleCloseDetail}
+        onExplore={handleExplore}
       />
 
       {/* Rename Dialog */}
@@ -960,6 +1129,21 @@ export function SessionsPage() {
         onClose={() => setRenameSession(null)}
         onSave={handleSaveRename}
         isPending={updateSession.isPending}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <DeleteConfirmDialog
+        open={!!deleteSessionId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteSessionId(null);
+            setDeleteSessionTitle(undefined);
+          }
+        }}
+        itemName={deleteSessionTitle}
+        itemType="session"
+        onConfirm={handleConfirmDelete}
+        isLoading={deleteSession.isPending}
       />
     </div>
   );

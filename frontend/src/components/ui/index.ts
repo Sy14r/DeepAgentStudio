@@ -1,9 +1,23 @@
 export { Alert, AlertTitle, AlertDescription } from './alert';
+export {
+  AlertDialog,
+  AlertDialogPortal,
+  AlertDialogOverlay,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from './alert-dialog';
 export { Avatar, AvatarImage, AvatarFallback } from './avatar';
 export { Badge, badgeVariants } from './badge';
 export { Button, buttonVariants } from './button';
 export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent } from './card';
 export { Checkbox } from './checkbox';
+export { ConfirmDialog, DeleteConfirmDialog } from './confirm-dialog';
 export {
   Dialog,
   DialogPortal,

@@ -13,8 +13,10 @@ import {
   ToolEditorPage,
   MCPServerEditorPage,
   PromptsPage,
+  PromptEditorPage,
   PlaygroundPage,
   SessionsPage,
+  TraceExplorerPage,
   SettingsPage,
 } from '@/pages';
 
@@ -72,8 +74,9 @@ function App() {
 
         {/* Prompts */}
         <Route path="prompts" element={<PromptsPage />} />
-        <Route path="prompts/new" element={<PromptsPage />} />
-        <Route path="prompts/:id" element={<PromptsPage />} />
+        <Route path="prompts/new" element={<PromptEditorPage />} />
+        <Route path="prompts/:id" element={<PromptEditorPage />} />
+        <Route path="prompts/:id/edit" element={<PromptEditorPage />} />
 
         {/* Playground */}
         <Route path="playground" element={<PlaygroundPage />} />
@@ -83,6 +86,7 @@ function App() {
         {/* Sessions */}
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="sessions/:id" element={<SessionsPage />} />
+        <Route path="sessions/:id/trace" element={<TraceExplorerPage />} />
 
         {/* Settings */}
         <Route path="settings" element={<SettingsPage />} />

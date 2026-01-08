@@ -7,8 +7,10 @@ This module implements the observability layer for DeepAgentStudio:
 - TraceStep: Captures detailed execution traces for debugging
 """
 from enum import Enum
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, JSON, Float, BigInteger
-from sqlalchemy.orm import relationship
+import uuid
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, JSON, Float, BigInteger, Numeric, Uuid
+from sqlalchemy.dialects.postgresql import JSONB, ARRAY as PG_ARRAY
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from sqlalchemy import Enum as SQLEnum
 
@@ -50,6 +52,32 @@ class MediaFileType(str, Enum):
     FILE = "file"      # Generic files (CSV, ZIP, PDF, etc.)
 
 
+class SpanType(str, Enum):
+    """
+    Type of span in hierarchical trace.
+
+    Based on LangSmith/Langfuse conventions for comprehensive tracing.
+    """
+    AGENT = "agent"          # Top-level agent execution
+    CHAIN = "chain"          # Chain/sequence execution
+    LLM = "llm"              # LLM API call
+    TOOL = "tool"            # Tool invocation
+    RETRIEVER = "retriever"  # Document retrieval
+    EMBEDDING = "embedding"  # Embedding generation
+    PARSER = "parser"        # Output parsing
+    PROMPT = "prompt"        # Prompt formatting
+    MEMORY = "memory"        # Memory read/write
+    THOUGHT = "thought"      # Agent reasoning (preserved from TraceStep)
+    ERROR = "error"          # Error occurrence
+
+
+class SpanStatus(str, Enum):
+    """Status of a span execution"""
+    RUNNING = "running"      # Currently executing
+    SUCCESS = "success"      # Completed successfully
+    ERROR = "error"          # Failed with error
+
+
 class Session(Base):
     """
     Session model - Records agent execution instances.
@@ -70,6 +98,7 @@ class Session(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
     agent_version_id = Column(Integer, ForeignKey("agent_versions.id", ondelete="SET NULL"), nullable=True)
+    prompt_version_id = Column(Integer, ForeignKey("prompt_versions.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Session metadata
     title = Column(String(255), nullable=True)  # Optional user-defined title
@@ -96,9 +125,11 @@ class Session(Base):
     user = relationship("User", back_populates="sessions")
     agent = relationship("Agent")  # No back_populates to avoid circular
     agent_version = relationship("AgentVersion")  # Snapshot of agent config used
+    prompt_version = relationship("PromptVersion")  # Prompt version used in this session
     messages = relationship("Message", back_populates="session", cascade="all, delete-orphan", order_by="Message.sequence_number")
     trace_steps = relationship("TraceStep", back_populates="session", cascade="all, delete-orphan", order_by="TraceStep.step_number")
     media_files = relationship("SessionMediaFile", back_populates="session", cascade="all, delete-orphan", order_by="SessionMediaFile.created_at")
+    spans = relationship("Span", back_populates="session", passive_deletes=True)
 
     def __repr__(self):
         return f"<Session(id={self.id}, agent_id={self.agent_id}, status={self.status.value}, started_at={self.started_at})>"
@@ -231,3 +262,83 @@ class SessionMediaFile(Base):
 
     def __repr__(self):
         return f"<SessionMediaFile(id={self.id}, session_id={self.session_id}, file_name={self.file_name}, type={self.media_type})>"
+
+
+class Span(Base):
+    """
+    Span model - Hierarchical trace unit for enhanced observability.
+
+    A span represents a single unit of work in agent execution with:
+    - Unique ID and trace association
+    - Parent span reference (for hierarchy)
+    - Start/end timestamps and duration
+    - Input and output data
+    - Token usage and cost (for LLM spans)
+    - Status (running, success, error)
+    - Rich metadata (tags, custom fields)
+
+    Implements LangSmith/Langfuse-style hierarchical tracing.
+    See ENHANCED_TRACING_SPEC.md for full specification.
+    """
+    __tablename__ = "spans"
+
+    # Primary key
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Trace association
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    trace_id = Column(Uuid, nullable=False, index=True)
+
+    # Hierarchy
+    parent_span_id = Column(Integer, ForeignKey("spans.id", ondelete="CASCADE"), nullable=True, index=True)
+    span_order = Column(Integer, nullable=False)  # Order among siblings
+    depth = Column(Integer, nullable=False, default=0)  # Nesting depth for UI
+
+    # Identification - use values_callable to serialize enum values (lowercase) not names (uppercase)
+    span_type = Column(SQLEnum(SpanType, values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
+    name = Column(String(255), nullable=False)  # Human-readable name
+
+    # Timing
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    duration_ms = Column(Integer, nullable=True)  # Computed from started_at/ended_at
+
+    # Status - use values_callable to serialize enum values (lowercase) not names (uppercase)
+    status = Column(SQLEnum(SpanStatus, values_callable=lambda x: [e.value for e in x]), nullable=False, default=SpanStatus.RUNNING, index=True)
+    status_message = Column(Text, nullable=True)
+
+    # Data (using JSON for cross-database compatibility)
+    input = Column(JSON, nullable=True)  # Operation input
+    output = Column(JSON, nullable=True)  # Operation output
+
+    # LLM-specific (nullable for non-LLM spans)
+    model_name = Column(String(100), nullable=True)
+    model_provider = Column(String(50), nullable=True)
+    model_parameters = Column(JSON, nullable=True)  # temperature, max_tokens, etc.
+    tokens_input = Column(Integer, nullable=True)
+    tokens_output = Column(Integer, nullable=True)
+    tokens_total = Column(Integer, nullable=True)
+    cost_usd = Column(Numeric(10, 6), nullable=True)
+
+    # Tool-specific (nullable for non-tool spans)
+    tool_name = Column(String(255), nullable=True, index=True)
+
+    # Error details (nullable)
+    error_type = Column(String(255), nullable=True)
+    error_message = Column(Text, nullable=True)
+    error_stack = Column(Text, nullable=True)
+
+    # Metadata
+    tags = Column(PG_ARRAY(Text), nullable=True)  # Array of tags for filtering
+    meta = Column(JSONB, default=dict, nullable=False)  # Custom key-value pairs
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    # Use passive_deletes=True to let the database handle cascade delete via ondelete="CASCADE"
+    session = relationship("Session", back_populates="spans")
+    parent_span = relationship("Span", remote_side=[id], backref="child_spans")
+
+    def __repr__(self):
+        return f"<Span(id={self.id}, session_id={self.session_id}, type={self.span_type.value}, name={self.name})>"

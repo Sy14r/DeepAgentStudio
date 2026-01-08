@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import {
   Card,
@@ -39,9 +39,12 @@ import {
   WifiOff,
   Zap,
   Paperclip,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { useAgents, useInvokeAgent, useAgentWebSocket, getErrorMessage } from '@/api/hooks';
-import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload } from '@/api/hooks';
+import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload, SessionTitleUpdatePayload } from '@/api/hooks';
 import { useSessions, useSessionMessages, useSessionTraces } from '@/api/hooks/useSessions';
 import { TraceStep, Session, ContentBlock } from '@/api/types';
 
@@ -56,6 +59,131 @@ interface ChatMessage {
 
 interface TraceStepDisplay extends TraceStep {
   timestamp?: Date;
+}
+
+/**
+ * Recursively parse JSON strings within JSON values.
+ * This handles cases where JSON is double-encoded as strings.
+ */
+function deepParseJson(value: unknown): unknown {
+  if (typeof value === 'string') {
+    // Try to parse strings that look like JSON
+    const trimmed = value.trim();
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+      (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return deepParseJson(parsed);
+      } catch {
+        // Not valid JSON, return as-is
+        return value;
+      }
+    }
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(deepParseJson);
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value)) {
+      result[key] = deepParseJson(val);
+    }
+    return result;
+  }
+
+  return value;
+}
+
+/**
+ * Render a JSON value with syntax highlighting.
+ */
+function JsonValue({ value, depth = 0 }: { value: unknown; depth?: number }): JSX.Element {
+  const indent = '  '.repeat(depth);
+  const childIndent = '  '.repeat(depth + 1);
+
+  if (value === null) {
+    return <span className="text-orange-500 dark:text-orange-400">null</span>;
+  }
+
+  if (typeof value === 'boolean') {
+    return <span className="text-orange-500 dark:text-orange-400">{value.toString()}</span>;
+  }
+
+  if (typeof value === 'number') {
+    return <span className="text-blue-600 dark:text-blue-400">{value}</span>;
+  }
+
+  if (typeof value === 'string') {
+    // Truncate very long strings for display
+    const displayValue = value.length > 500 ? value.slice(0, 500) + '...' : value;
+    return <span className="text-green-600 dark:text-green-400">"{displayValue}"</span>;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span>[]</span>;
+    }
+    return (
+      <span>
+        {'[\n'}
+        {value.map((item, index) => (
+          <span key={index}>
+            {childIndent}
+            <JsonValue value={item} depth={depth + 1} />
+            {index < value.length - 1 ? ',' : ''}
+            {'\n'}
+          </span>
+        ))}
+        {indent}]
+      </span>
+    );
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length === 0) {
+      return <span>{'{}'}</span>;
+    }
+    return (
+      <span>
+        {'{\n'}
+        {entries.map(([key, val], index) => (
+          <span key={key}>
+            {childIndent}
+            <span className="text-purple-600 dark:text-purple-400">"{key}"</span>
+            {': '}
+            <JsonValue value={val} depth={depth + 1} />
+            {index < entries.length - 1 ? ',' : ''}
+            {'\n'}
+          </span>
+        ))}
+        {indent}{'}'}
+      </span>
+    );
+  }
+
+  return <span>{String(value)}</span>;
+}
+
+/**
+ * Component to prettify and syntax-highlight JSON data.
+ * Handles nested JSON strings and provides visual formatting.
+ */
+function JsonPrettifier({ data }: { data: unknown }): JSX.Element {
+  // Deep parse to handle nested JSON strings
+  const parsedData = deepParseJson(data);
+
+  return (
+    <pre className="text-xs bg-background/50 rounded p-2 mt-2 overflow-hidden whitespace-pre-wrap break-all font-mono">
+      <JsonValue value={parsedData} />
+    </pre>
+  );
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
@@ -119,6 +247,20 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 }
 
 function TraceStepItem({ step }: { step: TraceStepDisplay }) {
+  // Threshold for considering content "long" (in characters)
+  const COLLAPSE_THRESHOLD = 300;
+
+  // Calculate content lengths
+  const toolInputStr = step.tool_input ? JSON.stringify(step.tool_input, null, 2) : '';
+  const toolOutputStr = step.tool_output ? JSON.stringify(step.tool_output, null, 2) : '';
+  const contentLength = (step.content?.length || 0) + toolInputStr.length + toolOutputStr.length;
+
+  // Determine if this card should be collapsible
+  const isLongContent = contentLength > COLLAPSE_THRESHOLD;
+
+  // Start collapsed if content is long
+  const [isExpanded, setIsExpanded] = useState(!isLongContent);
+
   const getStepIcon = () => {
     switch (step.step_type) {
       case 'thought':
@@ -154,37 +296,66 @@ function TraceStepItem({ step }: { step: TraceStepDisplay }) {
   };
 
   return (
-    <div className={`rounded-lg border p-3 ${getStepColor()}`}>
-      <div className="flex items-center gap-2 mb-2">
-        {getStepIcon()}
-        <span className="font-medium capitalize text-sm">
+    <div className={`rounded-lg border p-3 overflow-hidden min-w-0 ${getStepColor()}`}>
+      <div className="flex items-center gap-2 mb-2 min-w-0">
+        <span className="shrink-0">{getStepIcon()}</span>
+        <span className="font-medium capitalize text-sm truncate">
           {step.step_type.replace('_', ' ')}
         </span>
         {step.tool_name && (
-          <Badge variant="outline" className="text-xs">
+          <Badge variant="outline" className="text-xs shrink-0">
             {step.tool_name}
           </Badge>
         )}
         {step.latency_ms && (
-          <span className="text-xs text-muted-foreground ml-auto">
+          <span className="text-xs text-muted-foreground ml-auto shrink-0">
             {step.latency_ms}ms
           </span>
         )}
+        {isLongContent && (
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="ml-auto shrink-0 p-1 hover:bg-background/50 rounded transition-colors"
+            title={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            {isExpanded ? (
+              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            )}
+          </button>
+        )}
       </div>
-      {step.content && (
-        <p className="text-sm text-muted-foreground whitespace-pre-wrap">
-          {step.content}
-        </p>
-      )}
-      {step.tool_input && (
-        <pre className="text-xs bg-background/50 rounded p-2 mt-2 overflow-x-auto">
-          {JSON.stringify(step.tool_input, null, 2)}
-        </pre>
-      )}
-      {step.tool_output && (
-        <pre className="text-xs bg-background/50 rounded p-2 mt-2 overflow-x-auto">
-          {JSON.stringify(step.tool_output, null, 2)}
-        </pre>
+
+      {/* Collapsible content */}
+      <div className={isExpanded ? '' : 'max-h-24 overflow-hidden relative'}>
+        {step.content && (
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap break-words overflow-hidden">
+            {step.content}
+          </p>
+        )}
+        {step.tool_input && (
+          <JsonPrettifier data={step.tool_input} />
+        )}
+        {step.tool_output && (
+          <JsonPrettifier data={step.tool_output} />
+        )}
+
+        {/* Gradient fade overlay when collapsed */}
+        {!isExpanded && isLongContent && (
+          <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-inherit to-transparent pointer-events-none" />
+        )}
+      </div>
+
+      {/* Expand/collapse button at bottom for collapsed cards */}
+      {isLongContent && !isExpanded && (
+        <button
+          onClick={() => setIsExpanded(true)}
+          className="w-full mt-2 text-xs text-muted-foreground hover:text-foreground flex items-center justify-center gap-1 py-1"
+        >
+          <ChevronDown className="h-3 w-3" />
+          Show more
+        </button>
       )}
     </div>
   );
@@ -201,6 +372,7 @@ export function PlaygroundPage() {
   const [sessionId, setSessionId] = useState<number | null>(
     paramSessionId ? parseInt(paramSessionId) : null
   );
+  const [sessionTitle, setSessionTitle] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [streamingEnabled, setStreamingEnabled] = useState(true);
@@ -301,6 +473,10 @@ export function PlaygroundPage() {
     setPendingStreamMessage(null);
   }, []);
 
+  const handleSessionTitleUpdate = useCallback((payload: SessionTitleUpdatePayload) => {
+    setSessionTitle(payload.title);
+  }, []);
+
   // WebSocket hook
   const {
     isConnected,
@@ -315,6 +491,7 @@ export function PlaygroundPage() {
     onToolResult: handleToolResult,
     onFinalAnswer: handleFinalAnswer,
     onError: handleStreamError,
+    onSessionTitleUpdate: handleSessionTitleUpdate,
   });
 
   const agents = agentsData?.agents || [];
@@ -494,11 +671,13 @@ export function PlaygroundPage() {
     setMessages([]);
     setTraceSteps([]);
     setSessionId(null);
+    setSessionTitle(null);
     setError(null);
   };
 
   const handleContinueSession = (session: Session) => {
     setSessionId(session.id);
+    setSessionTitle(session.title || null);
     setMessages([]);
     setTraceSteps([]);
     setError(null);
@@ -626,9 +805,9 @@ export function PlaygroundPage() {
         </Alert>
       )}
 
-      <div className="flex-1 grid gap-4 lg:grid-cols-2 min-h-0">
+      <div className="flex-1 grid gap-4 lg:grid-cols-2 min-h-0 overflow-hidden">
         {/* Chat Panel */}
-        <Card className="flex flex-col min-h-0">
+        <Card className="flex flex-col min-h-0 min-w-0 overflow-hidden">
           <CardHeader className="py-3 border-b shrink-0">
             <div className="flex items-center gap-2">
               <MessageSquare className="h-5 w-5" />
@@ -641,8 +820,8 @@ export function PlaygroundPage() {
                   </Badge>
                 )}
                 {sessionId && (
-                  <Badge variant="outline">
-                    Session #{sessionId}
+                  <Badge variant="outline" title={`Session #${sessionId}`}>
+                    {sessionTitle || `Session #${sessionId}`}
                   </Badge>
                 )}
               </div>
@@ -705,7 +884,7 @@ export function PlaygroundPage() {
         </Card>
 
         {/* Trace Panel */}
-        <Card className="flex flex-col min-h-0">
+        <Card className="flex flex-col min-h-0 min-w-0 overflow-hidden">
           <CardHeader className="py-3 border-b shrink-0">
             <div className="flex items-center gap-2">
               <GitBranch className="h-5 w-5" />
@@ -714,6 +893,19 @@ export function PlaygroundPage() {
                 <Badge variant="outline" className="ml-auto">
                   {traceSteps.length} steps
                 </Badge>
+              )}
+              {sessionId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  asChild
+                  className="h-7 text-xs gap-1"
+                >
+                  <Link to={`/sessions/${sessionId}/trace`}>
+                    View Full Trace
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </Button>
               )}
             </div>
           </CardHeader>
@@ -724,7 +916,7 @@ export function PlaygroundPage() {
                   Execution trace will appear here during conversations.
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-3 overflow-hidden w-full">
                   {traceSteps.map((step, index) => (
                     <TraceStepItem key={`${step.id}-${index}`} step={step} />
                   ))}

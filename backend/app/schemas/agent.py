@@ -45,6 +45,7 @@ class AgentVersionConfig(BaseModel):
     memory_config: Optional[MemoryConfig] = Field(default_factory=lambda: MemoryConfig())
     tool_ids: List[int] = Field(default=[], description="List of tool IDs assigned to agent")
     prompt_id: Optional[int] = Field(default=None, description="Prompt template ID")
+    prompt_variables: Optional[Dict[str, str]] = Field(default=None, description="Variables for prompt template substitution")
     system_prompt: Optional[str] = Field(default=None, description="System prompt override")
 
     class Config:

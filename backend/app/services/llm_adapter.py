@@ -281,6 +281,7 @@ class LLMProviderAdapter:
             "model": model,
             "temperature": temperature,
             "timeout": timeout,
+            "stream_usage": True,  # Enable token usage reporting for streaming
         }
 
         # Handle max_tokens vs max_completion_tokens based on model

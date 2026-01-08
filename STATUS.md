@@ -1,6 +1,6 @@
 # DeepAgentStudio - Development Status
 
-**Last Updated**: 2026-01-07
+**Last Updated**: 2026-01-08
 
 ## Executive Summary
 
@@ -18,6 +18,170 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 ---
 
 ## Recent Updates (2026-01-07)
+
+### Enhanced Tracing System - All Phases Complete
+
+**Goal**: LangSmith/Langfuse-style hierarchical tracing for agent execution observability.
+
+**Phase 1: Database & Core Backend** - Complete
+- New `spans` table with hierarchical structure (parent_span_id, depth, span_order)
+- 11 span types: agent, chain, llm, tool, retriever, embedding, parser, prompt, memory, thought, error
+- Token usage, cost tracking, and timing per span
+- Error capture with type, message, and stack trace
+
+**Phase 1 Files**:
+- `backend/alembic/versions/d4e5f6a7b8c9_add_spans_table.py` - Database migration
+- `backend/app/schemas/span.py` - Pydantic schemas (SpanCreate, SpanResponse, SpanTreeResponse, SpanStatsResponse)
+- `backend/app/services/span_recorder.py` - SpanRecorder with context manager support
+- `backend/app/services/span_service.py` - CRUD operations, tree building, statistics
+- `backend/app/api/v1/spans.py` - REST API endpoints
+- `backend/tests/test_span_service.py` - 20 passing tests
+
+**Phase 2: LangChain Integration & Executor Update** - Complete
+- Automatic span capture via LangChain callback handler
+- Token/cost calculation using model pricing configuration
+- Integration with streaming executor for hierarchical tracing
+
+**Phase 2 Files**:
+- `backend/app/services/tracing_callback.py` - DeepAgentTracingCallback implementing all LangChain callbacks
+- `backend/app/utils/model_pricing.py` - Model pricing for 25+ models (OpenAI, Anthropic, Google)
+
+**Phase 3: Real-Time WebSocket Updates** - Complete
+- WebSocket span events (`span_start`, `span_end`) streamed to frontend
+- Frontend Zustand store for real-time span state management
+- Updated WebSocket handler to auto-update span store
+- Live recording indicator component
+
+**Phase 3 Files**:
+- `backend/app/services/tracing_callback.py` - Added WebSocket event emission
+- `frontend/src/stores/spanStore.ts` - Zustand store for live span state
+- `frontend/src/api/hooks/useAgentWebSocket.ts` - Updated with span event handlers
+- `frontend/src/components/traces/LiveSpanIndicator.tsx` - Recording status UI
+- `backend/tests/test_tracing_callback.py` - 23 tests (18 Phase 2 + 5 Phase 3)
+
+**Phase 4: Frontend Tree View & Detail Panel** - Complete
+- Hierarchical span tree visualization with expand/collapse support
+- Type-specific icons and color-coded span badges
+- Duration bars and timing visualization
+- Span detail panel with tabbed content (Info, Input, Output, Error, Meta)
+- Integrated into SessionDetailDialog as new "Spans" tab
+
+**Phase 4 Files**:
+- `frontend/src/api/types.ts` - Added Span types (SpanType, SpanStatus, SpanTreeNode, etc.)
+- `frontend/src/api/hooks/useSpans.ts` - API hooks (useSpans, useSpanTree, useSpan, useSpanStats)
+- `frontend/src/components/traces/SpanTypeIcon.tsx` - Type icons with color scheme
+- `frontend/src/components/traces/SpanTreeNode.tsx` - Recursive tree node component
+- `frontend/src/components/traces/SpanTreeView.tsx` - Full tree with filtering, stats header
+- `frontend/src/components/traces/SpanDetailPanel.tsx` - Detailed span view with tabs
+- `frontend/src/components/sessions/SessionDetailDialog.tsx` - Added Spans tab with split view
+
+**Callback Methods Implemented**:
+- `on_llm_start/end` - Captures LLM calls with model info, tokens, cost
+- `on_tool_start/end` - Captures tool invocations with inputs/outputs
+- `on_chain_start/end` - Captures chain executions with nesting
+- `on_agent_action/finish` - Captures agent reasoning as thought spans
+- `on_retriever_start/end` - Captures retrieval queries
+
+**API Endpoints**:
+- `GET /sessions/{id}/spans` - List spans with filtering
+- `GET /sessions/{id}/spans/tree` - Hierarchical tree view
+- `GET /sessions/{id}/spans/stats` - Aggregated statistics
+- `GET /sessions/{id}/spans/traces` - List all traces for session
+- `GET /sessions/{id}/spans/{span_id}` - Single span detail
+
+**WebSocket Events** (Phase 3):
+- `span_start` - Emitted when a span begins
+- `span_end` - Emitted when a span completes (with status, duration, output, cost)
+
+**Phase 5: Filtering, Search & Statistics** - Complete
+- SpanFilters component with type multi-select, status filter, duration range, error toggle
+- SpanSearch component with debounced search, match navigation, highlight support
+- SpanStats component with CSS-based charts (horizontal bar, token ring)
+- URL filter persistence via useSpanFilters hook
+- TraceExplorer component integrating all Phase 5 features
+
+**Phase 5 Files**:
+- `frontend/src/components/traces/SpanFilters.tsx` - Multi-filter controls
+- `frontend/src/components/traces/SpanSearch.tsx` - Text search with debounce
+- `frontend/src/components/traces/SpanStats.tsx` - Statistics visualization
+- `frontend/src/components/traces/useSpanFilters.ts` - URL-based filter persistence
+- `frontend/src/components/traces/TraceExplorer.tsx` - Integrated trace exploration component
+
+**Phase 6: Full Trace Explorer Page** - Complete
+- Dedicated full-page trace exploration experience
+- Resizable split view (tree on left, detail panel on right)
+- Session header with metadata and quick stats
+- Export functionality (JSON hierarchical, CSV flattened)
+- Keyboard navigation (Cmd/Ctrl+F for search, Escape to deselect)
+- Deep linking with span ID in URL (`?span=ID`)
+- Breadcrumb navigation back to sessions
+
+**Phase 6 Files**:
+- `frontend/src/pages/TraceExplorerPage.tsx` - Full-page trace explorer
+- `frontend/src/App.tsx` - Added route `/sessions/:id/trace`
+- `frontend/src/pages/SessionsPage.tsx` - Added Trace Explorer navigation links
+
+**Phase 7: Polish & Performance** - Complete
+- Memoization with React.memo on SpanTreeNode for optimized re-renders
+- Error boundaries with retry functionality (TraceErrorBoundary component)
+- Skeleton loaders for tree and detail panel loading states
+- Retry mechanism with exponential backoff (3 retries, 1s-10s delay)
+- Accessibility improvements (ARIA labels, roles, focus management)
+- useRefreshSpanData hook for manual cache invalidation
+
+**Phase 7 Files**:
+- `frontend/src/components/traces/SpanTreeNode.tsx` - Added React.memo, ARIA attributes
+- `frontend/src/components/traces/SpanTreeView.tsx` - Added role="tree", aria-busy
+- `frontend/src/components/traces/TraceErrorBoundary.tsx` - Error boundary with retry
+- `frontend/src/components/traces/SpanSkeletons.tsx` - Skeleton loading components
+- `frontend/src/api/hooks/useSpans.ts` - Added retry config, useRefreshSpanData hook
+- `frontend/src/pages/TraceExplorerPage.tsx` - Integrated error boundaries and skeletons
+
+**Enhanced Tracing System Status**: All 7 phases complete!
+
+**Reference**: `ENHANCED_TRACING_SPEC.md`
+
+---
+
+### Prompt Editor Page - Full Version Management
+
+**Full-Page Prompt Editor** - Complete
+- Replaced modal dialog with dedicated `PromptEditorPage`
+- Split-view layout: form on left (2/3), version history on right (1/3)
+- Tabbed form interface: "Basic Info" and "Template" tabs
+- Real-time variable detection with `{variable}` syntax highlighting
+- Live template preview with variable substitution
+
+**Version History Panel** - Complete
+- Displays all versions with version number, creation date, usage count
+- Current version indicator with star badge
+- Message type badges (system/user/assistant)
+- Variable list for each version
+- View and Rollback buttons per version
+- Rollback confirmation dialog
+
+**Version Comparison Dialog** - Complete
+- Side-by-side diff view comparing any version to current
+- Line-by-line diff with added/removed highlighting
+- Message type change detection
+- "View" tab showing full version details
+- "Compare" tab for diff visualization
+- Direct rollback from comparison view
+
+**Technical Implementation**:
+- `frontend/src/pages/PromptEditorPage.tsx` - Main editor page
+- `frontend/src/components/prompts/VersionHistoryPanel.tsx` - Version list panel
+- `frontend/src/components/prompts/VersionDetailDialog.tsx` - Detail/comparison modal
+- New hooks: `usePromptVersions()`, `useRollbackPrompt()`
+- Query invalidation on save for instant version history refresh
+- Card click navigation: clicking prompt card opens editor directly
+
+**Routes**:
+- `/prompts/new` - Create new prompt
+- `/prompts/:id` - Edit existing prompt
+- `/prompts/:id/edit` - Edit existing prompt (alias)
+
+---
 
 ### Multimodal Output Support (Images, Audio, Video, Files)
 
@@ -146,7 +310,7 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ## Current Application Inventory
 
-### Database Schema (21 Tables)
+### Database Schema (23 Tables)
 
 ```
 users (5 columns)
@@ -163,15 +327,16 @@ users (5 columns)
 ├── llm_provider_configs (10 columns)
 ├── sessions (15 columns)
 │   ├── messages (8 columns + content_blocks JSONB)
-│   ├── trace_steps (10 columns)
+│   ├── trace_steps (10 columns) - legacy, being replaced by spans
+│   ├── spans (25 columns) - NEW: hierarchical tracing
 │   ├── session_workspaces (7 columns)
 │   ├── session_tasks (9 columns)
 │   ├── session_scratchpads (5 columns)
-│   └── session_media_files (10 columns) - NEW: multimodal output storage
+│   └── session_media_files (10 columns) - multimodal output storage
 └── search_provider_configs (7 columns)
 ```
 
-**Migrations**: 11 Alembic migrations applied
+**Migrations**: 14 Alembic migrations applied
 
 ### Built-in Tools (12 Total)
 
@@ -204,7 +369,7 @@ users (5 columns)
 | Plan-and-Execute | plan_and_execute | Planning before execution |
 | Conversational | conversational | Simple chat without tools |
 
-### Frontend Pages (14 Total)
+### Frontend Pages (16 Total)
 
 | Page | Description |
 |------|-------------|
@@ -216,14 +381,16 @@ users (5 columns)
 | ToolsPage | Unified tools view (Python + MCP) |
 | ToolEditorPage | Python tool code editor |
 | MCPServerEditorPage | MCP server configuration |
-| PromptsPage | Prompt template management |
+| PromptsPage | Prompt template list with grid/list view |
+| PromptEditorPage | Full-page prompt editor with version history |
 | PlaygroundPage | Interactive chat with streaming |
 | SessionsPage | Session history and traces |
+| TraceExplorerPage | Full-page hierarchical trace explorer |
 | SettingsPage | LLM provider configuration |
 | LoginPage | User authentication |
 | RegisterPage | User registration |
 
-### API Endpoints (70+ Total)
+### API Endpoints (80+ Total)
 
 | Router | Endpoints | Description |
 |--------|-----------|-------------|
@@ -233,6 +400,7 @@ users (5 columns)
 | `/api/v1/tools` | 8 | CRUD, schema generation |
 | `/api/v1/prompts` | 10 | CRUD, versions, rollback, preview |
 | `/api/v1/sessions` | 13 | CRUD, messages, traces, statistics |
+| `/api/v1/sessions/.../spans` | 5 | List, tree, stats, traces, detail - **NEW** |
 | `/api/v1/llm-providers` | 8 | CRUD, test connection |
 | `/api/v1/mcp-servers` | 7 | CRUD, test connection, discover tools |
 | `/api/v1/ws` | 1 | WebSocket agent streaming |
@@ -323,12 +491,12 @@ users (5 columns)
 | Metric | Count |
 |--------|-------|
 | Backend Python Files | ~50 |
-| Frontend TypeScript Files | ~75 |
+| Frontend TypeScript Files | ~95 |
 | SQLAlchemy Models | 17 |
-| Database Tables | 21 |
-| API Routers | 9 |
-| Frontend Pages | 14 |
-| UI Components | 18+ (shadcn/ui) |
+| Database Tables | 23 |
+| API Routers | 10 |
+| Frontend Pages | 16 |
+| UI Components | 20+ (shadcn/ui) |
 | Built-in Tools | 12 |
 | Built-in Agents | 1 |
 | Built-in Agent Types | 3 |
@@ -422,11 +590,12 @@ docker-compose up -d --build
 | `SPEC.md` | Product specification |
 | `FRONTEND-SPEC.md` | Frontend implementation spec |
 | `ADVANCED_AGENT_TOOLKIT_SPEC.md` | Workspace tools for autonomous agents |
+| `ENHANCED_TRACING_SPEC.md` | Hierarchical tracing system specification |
 | `README.md` | Project overview & quick start |
 | `TESTING.md` | Testing guide |
 
 ---
 
-**Last Test Run**: 2026-01-07
+**Last Test Run**: 2026-01-08
 **Build Status**: Healthy (all containers running)
-**Database Status**: 11 migrations applied
+**Database Status**: 14 migrations applied

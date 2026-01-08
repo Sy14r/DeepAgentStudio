@@ -32,6 +32,7 @@ import {
   usePrompt,
   useCreatePrompt,
   useUpdatePrompt,
+  useCreatePromptVersion,
   getErrorMessage,
 } from '@/api/hooks';
 import { PromptUseCase, MessageType } from '@/api/types';
@@ -41,8 +42,9 @@ const USE_CASES: { value: PromptUseCase; label: string }[] = [
   { value: 'coding', label: 'Coding' },
   { value: 'analysis', label: 'Analysis' },
   { value: 'writing', label: 'Writing' },
-  { value: 'general', label: 'General' },
-  { value: 'custom', label: 'Custom' },
+  { value: 'conversation', label: 'Conversation' },
+  { value: 'planning', label: 'Planning' },
+  { value: 'other', label: 'Other' },
 ];
 
 const MESSAGE_TYPES: { value: MessageType; label: string }[] = [
@@ -54,10 +56,10 @@ const MESSAGE_TYPES: { value: MessageType; label: string }[] = [
 const promptFormSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100, 'Name must be less than 100 characters'),
   description: z.string().max(500, 'Description must be less than 500 characters').optional(),
-  use_case: z.enum(['research', 'coding', 'analysis', 'writing', 'general', 'custom']),
+  use_case: z.enum(['research', 'coding', 'analysis', 'writing', 'conversation', 'planning', 'other']),
   message_type: z.enum(['system', 'user', 'assistant']),
   tags: z.array(z.string()).default([]),
-  content: z.string().min(1, 'Content is required').max(10000, 'Content must be less than 10000 characters'),
+  template: z.string().min(1, 'Template is required').max(10000, 'Template must be less than 10000 characters'),
 });
 
 type PromptFormData = z.infer<typeof promptFormSchema>;
@@ -80,16 +82,17 @@ export function PromptForm({ open, onClose, onSuccess, promptId }: PromptFormPro
 
   const createPrompt = useCreatePrompt();
   const updatePrompt = useUpdatePrompt(promptId ?? 0);
+  const createVersion = useCreatePromptVersion(promptId ?? 0);
 
   const form = useForm<PromptFormData>({
     resolver: zodResolver(promptFormSchema),
     defaultValues: {
       name: '',
       description: '',
-      use_case: 'general',
+      use_case: 'other',
       message_type: 'system',
       tags: [],
-      content: '',
+      template: '',
     },
   });
 
@@ -107,11 +110,11 @@ export function PromptForm({ open, onClose, onSuccess, promptId }: PromptFormPro
         name: prompt.name,
         description: prompt.description || '',
         use_case: prompt.use_case,
-        message_type: prompt.message_type,
+        message_type: prompt.current_version?.message_type || 'system',
         tags: prompt.tags || [],
-        content: prompt.current_version?.content || '',
+        template: prompt.current_version?.template || '',
       });
-      detectVariables(prompt.current_version?.content || '');
+      detectVariables(prompt.current_version?.template || '');
     }
   }, [prompt, isEditing, form]);
 
@@ -121,10 +124,10 @@ export function PromptForm({ open, onClose, onSuccess, promptId }: PromptFormPro
       form.reset({
         name: '',
         description: '',
-        use_case: 'general',
+        use_case: 'other',
         message_type: 'system',
         tags: [],
-        content: '',
+        template: '',
       });
       setTagInput('');
       setError(null);
@@ -147,29 +150,50 @@ export function PromptForm({ open, onClose, onSuccess, promptId }: PromptFormPro
     );
   };
 
-  const handleContentChange = (value: string) => {
-    form.setValue('content', value);
+  const handleTemplateChange = (value: string) => {
+    form.setValue('template', value);
     detectVariables(value);
   };
 
   const onSubmit = async (data: PromptFormData) => {
     setError(null);
 
-    const payload = {
-      name: data.name,
-      description: data.description || undefined,
-      use_case: data.use_case,
-      message_type: data.message_type,
-      tags: data.tags,
-      content: data.content,
-      variables: detectedVariables,
-    };
-
     try {
       if (isEditing) {
-        await updatePrompt.mutateAsync(payload);
+        // When editing, update metadata and optionally create new version if template or message_type changed
+        const metadataPayload = {
+          name: data.name,
+          description: data.description || undefined,
+          use_case: data.use_case,
+          tags: data.tags,
+        };
+        await updatePrompt.mutateAsync(metadataPayload);
+
+        // Check if template or message_type changed - if so, create a new version
+        const originalTemplate = prompt?.current_version?.template || '';
+        const originalMessageType = prompt?.current_version?.message_type || 'system';
+        const templateChanged = data.template !== originalTemplate;
+        const messageTypeChanged = data.message_type !== originalMessageType;
+
+        if (templateChanged || messageTypeChanged) {
+          await createVersion.mutateAsync({
+            template: data.template,
+            message_type: data.message_type,
+          });
+        }
       } else {
-        await createPrompt.mutateAsync(payload);
+        // When creating, use nested version structure
+        const createPayload = {
+          name: data.name,
+          description: data.description || undefined,
+          use_case: data.use_case,
+          tags: data.tags,
+          version: {
+            template: data.template,
+            message_type: data.message_type,
+          },
+        };
+        await createPrompt.mutateAsync(createPayload);
       }
       onSuccess();
     } catch (err) {
@@ -177,7 +201,7 @@ export function PromptForm({ open, onClose, onSuccess, promptId }: PromptFormPro
     }
   };
 
-  const isPending = createPrompt.isPending || updatePrompt.isPending;
+  const isPending = createPrompt.isPending || updatePrompt.isPending || createVersion.isPending;
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -328,16 +352,16 @@ export function PromptForm({ open, onClose, onSuccess, promptId }: PromptFormPro
 
                 <FormField
                   control={form.control}
-                  name="content"
+                  name="template"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Prompt Content</FormLabel>
+                      <FormLabel>Prompt Template</FormLabel>
                       <FormControl>
                         <Textarea
                           placeholder="You are a helpful assistant that..."
                           className="resize-none min-h-[200px] font-mono text-sm"
                           {...field}
-                          onChange={(e) => handleContentChange(e.target.value)}
+                          onChange={(e) => handleTemplateChange(e.target.value)}
                         />
                       </FormControl>
                       <FormDescription>

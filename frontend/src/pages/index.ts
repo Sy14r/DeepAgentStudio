@@ -9,6 +9,8 @@ export { ToolsPage } from './ToolsPage';
 export { ToolEditorPage } from './ToolEditorPage';
 export { MCPServerEditorPage } from './MCPServerEditorPage';
 export { PromptsPage } from './PromptsPage';
+export { PromptEditorPage } from './PromptEditorPage';
 export { PlaygroundPage } from './PlaygroundPage';
 export { SessionsPage } from './SessionsPage';
+export { TraceExplorerPage } from './TraceExplorerPage';
 export { SettingsPage } from './SettingsPage';

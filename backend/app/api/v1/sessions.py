@@ -18,7 +18,7 @@ from ...database import get_db
 from ...services.media_storage import get_media_storage_service
 from ...models.user import User
 from ...models.agent import Agent
-from ...models.session import Session, Message, TraceStep, SessionStatus, MessageRole
+from ...models.session import Session, Message, TraceStep, SessionStatus, MessageRole, Span
 from ...schemas.session import (
     SessionCreate,
     SessionUpdate,
@@ -35,6 +35,125 @@ from ...schemas.session import (
 from ..deps import get_current_user
 
 router = APIRouter()
+
+
+# ============================================================================
+# Statistics and Analytics Endpoints (must be before /{session_id} routes)
+# ============================================================================
+
+@router.get("/statistics", response_model=SessionStatistics)
+def get_session_statistics(
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db)
+):
+    """
+    Get overall session statistics for the current user.
+
+    Returns:
+    - Total session count
+    - Success/failure counts
+    - Average latency
+    - Token usage totals
+    - Total cost
+    - Success rate percentage
+    """
+    # Get all sessions for user
+    total_sessions = db.query(Session).filter(
+        Session.user_id == current_user.id
+    ).count()
+
+    # Count by status
+    completed_sessions = db.query(Session).filter(
+        Session.user_id == current_user.id,
+        Session.status == SessionStatus.COMPLETED
+    ).count()
+
+    failed_sessions = db.query(Session).filter(
+        Session.user_id == current_user.id,
+        Session.status == SessionStatus.FAILED
+    ).count()
+
+    # Calculate average latency (only for completed sessions)
+    avg_latency = db.query(func.avg(Session.total_latency_ms)).filter(
+        Session.user_id == current_user.id,
+        Session.status == SessionStatus.COMPLETED,
+        Session.total_latency_ms.isnot(None)
+    ).scalar()
+
+    # Sum tokens
+    total_tokens_in = db.query(func.sum(Session.token_usage_input)).filter(
+        Session.user_id == current_user.id
+    ).scalar() or 0
+
+    total_tokens_out = db.query(func.sum(Session.token_usage_output)).filter(
+        Session.user_id == current_user.id
+    ).scalar() or 0
+
+    total_tokens = total_tokens_in + total_tokens_out
+
+    # Sum cost
+    total_cost = db.query(func.sum(Session.total_cost)).filter(
+        Session.user_id == current_user.id,
+        Session.total_cost.isnot(None)
+    ).scalar() or 0.0
+
+    # Calculate success rate
+    success_rate = (completed_sessions / total_sessions * 100) if total_sessions > 0 else 0.0
+
+    return SessionStatistics(
+        total_sessions=total_sessions,
+        completed_sessions=completed_sessions,
+        failed_sessions=failed_sessions,
+        average_latency_ms=float(avg_latency) if avg_latency else None,
+        total_tokens_used=total_tokens,
+        total_cost=float(total_cost),
+        success_rate=success_rate
+    )
+
+
+@router.post("/backfill-costs")
+def backfill_session_costs(
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db)
+):
+    """
+    Backfill session costs from span data.
+
+    This endpoint updates the total_cost field for all sessions
+    that have spans but no cost recorded. It calculates the total
+    cost from all spans associated with each session.
+
+    Returns:
+    - Number of sessions updated
+    - Total sessions checked
+    """
+    from decimal import Decimal
+
+    # Get all sessions for user that have null total_cost
+    sessions_to_update = db.query(Session).filter(
+        Session.user_id == current_user.id,
+        Session.total_cost.is_(None)
+    ).all()
+
+    updated_count = 0
+    for session in sessions_to_update:
+        # Calculate total cost from spans
+        total_cost = db.query(func.sum(Span.cost_usd)).filter(
+            Span.session_id == session.id,
+            Span.cost_usd.isnot(None)
+        ).scalar()
+
+        if total_cost and total_cost > Decimal(0):
+            session.total_cost = float(total_cost)
+            updated_count += 1
+
+    db.commit()
+
+    return {
+        "message": f"Backfilled costs for {updated_count} sessions",
+        "sessions_checked": len(sessions_to_update),
+        "sessions_updated": updated_count
+    }
 
 
 # ============================================================================
@@ -414,78 +533,8 @@ def create_trace_step(
 
 
 # ============================================================================
-# Statistics and Analytics Endpoints
+# Agent-specific Analytics Endpoints
 # ============================================================================
-
-@router.get("/statistics/overview", response_model=SessionStatistics)
-def get_session_statistics(
-    current_user: User = Depends(get_current_user),
-    db: DBSession = Depends(get_db)
-):
-    """
-    Get overall session statistics for the current user.
-
-    Returns:
-    - Total session count
-    - Success/failure counts
-    - Average latency
-    - Token usage totals
-    - Total cost
-    - Success rate percentage
-    """
-    # Get all sessions for user
-    total_sessions = db.query(Session).filter(
-        Session.user_id == current_user.id
-    ).count()
-
-    # Count by status
-    completed_sessions = db.query(Session).filter(
-        Session.user_id == current_user.id,
-        Session.status == SessionStatus.COMPLETED
-    ).count()
-
-    failed_sessions = db.query(Session).filter(
-        Session.user_id == current_user.id,
-        Session.status == SessionStatus.FAILED
-    ).count()
-
-    # Calculate average latency (only for completed sessions)
-    avg_latency = db.query(func.avg(Session.total_latency_ms)).filter(
-        Session.user_id == current_user.id,
-        Session.status == SessionStatus.COMPLETED,
-        Session.total_latency_ms.isnot(None)
-    ).scalar()
-
-    # Sum tokens
-    total_tokens_in = db.query(func.sum(Session.token_usage_input)).filter(
-        Session.user_id == current_user.id
-    ).scalar() or 0
-
-    total_tokens_out = db.query(func.sum(Session.token_usage_output)).filter(
-        Session.user_id == current_user.id
-    ).scalar() or 0
-
-    total_tokens = total_tokens_in + total_tokens_out
-
-    # Sum cost
-    total_cost = db.query(func.sum(Session.total_cost)).filter(
-        Session.user_id == current_user.id,
-        Session.total_cost.isnot(None)
-    ).scalar() or 0.0
-
-    # Calculate success rate
-    success_rate = (completed_sessions / total_sessions * 100) if total_sessions > 0 else 0.0
-
-    return SessionStatistics(
-        total_sessions=total_sessions,
-        completed_sessions=completed_sessions,
-        failed_sessions=failed_sessions,
-        average_latency_ms=float(avg_latency) if avg_latency else None,
-        total_tokens_used=total_tokens,
-        total_cost=float(total_cost),
-        success_rate=success_rate
-    )
-
 
 @router.get("/agents/{agent_id}/summary", response_model=AgentSessionSummary)
 def get_agent_session_summary(

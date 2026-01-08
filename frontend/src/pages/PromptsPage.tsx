@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Card,
   CardContent,
@@ -40,33 +40,21 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
-  MessageSquare,
-  User,
-  Bot,
 } from 'lucide-react';
 import { usePrompts, useDeletePrompt, getErrorMessage } from '@/api/hooks';
-import { Prompt, PromptUseCase, MessageType } from '@/api/types';
-import { PromptForm } from '@/components/prompts/PromptForm';
+import { Prompt, PromptUseCase } from '@/api/types';
 
 const USE_CASES: { value: PromptUseCase; label: string }[] = [
   { value: 'research', label: 'Research' },
   { value: 'coding', label: 'Coding' },
   { value: 'analysis', label: 'Analysis' },
   { value: 'writing', label: 'Writing' },
-  { value: 'general', label: 'General' },
-  { value: 'custom', label: 'Custom' },
+  { value: 'conversation', label: 'Conversation' },
+  { value: 'planning', label: 'Planning' },
+  { value: 'other', label: 'Other' },
 ];
 
-const MESSAGE_TYPES: { value: MessageType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { value: 'system', label: 'System', icon: MessageSquare },
-  { value: 'user', label: 'User', icon: User },
-  { value: 'assistant', label: 'Assistant', icon: Bot },
-];
-
-function getMessageTypeIcon(type: MessageType) {
-  const mt = MESSAGE_TYPES.find((m) => m.value === type);
-  return mt?.icon || FileText;
-}
+// Note: message_type is on PromptVersion, not shown in list view
 
 interface PromptCardProps {
   prompt: Prompt;
@@ -75,14 +63,15 @@ interface PromptCardProps {
 }
 
 function PromptCard({ prompt, onEdit, onDelete }: PromptCardProps) {
-  const MessageIcon = getMessageTypeIcon(prompt.message_type);
-
   return (
-    <Card className="group hover:border-primary/50 transition-colors">
+    <Card
+      className="group hover:border-primary/50 transition-colors cursor-pointer"
+      onClick={() => onEdit(prompt.id)}
+    >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
-            <MessageIcon className="h-5 w-5 text-primary" />
+            <FileText className="h-5 w-5 text-primary" />
             <CardTitle className="text-lg">{prompt.name}</CardTitle>
           </div>
           <DropdownMenu>
@@ -91,19 +80,20 @@ function PromptCard({ prompt, onEdit, onDelete }: PromptCardProps) {
                 variant="ghost"
                 size="sm"
                 className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100"
+                onClick={(e) => e.stopPropagation()}
               >
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => onEdit(prompt.id)}>
+              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit(prompt.id); }}>
                 <Pencil className="mr-2 h-4 w-4" />
                 Edit
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive"
-                onClick={() => onDelete(prompt.id)}
+                onClick={(e) => { e.stopPropagation(); onDelete(prompt.id); }}
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete
@@ -118,7 +108,6 @@ function PromptCard({ prompt, onEdit, onDelete }: PromptCardProps) {
       <CardContent>
         <div className="flex flex-wrap gap-2">
           <Badge variant="secondary">{prompt.use_case}</Badge>
-          <Badge variant="outline">{prompt.message_type}</Badge>
           {prompt.tags?.slice(0, 2).map((tag) => (
             <Badge key={tag} variant="outline">
               {tag}
@@ -140,19 +129,14 @@ function PromptCard({ prompt, onEdit, onDelete }: PromptCardProps) {
 interface PromptListItemProps extends PromptCardProps {}
 
 function PromptListItem({ prompt, onEdit, onDelete }: PromptListItemProps) {
-  const MessageIcon = getMessageTypeIcon(prompt.message_type);
-
   return (
     <div className="group flex items-center gap-4 rounded-lg border p-4 hover:border-primary/50 transition-colors">
-      <MessageIcon className="h-8 w-8 text-primary shrink-0" />
+      <FileText className="h-8 w-8 text-primary shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <h3 className="font-semibold truncate">{prompt.name}</h3>
           <Badge variant="secondary" className="shrink-0">
             {prompt.use_case}
-          </Badge>
-          <Badge variant="outline" className="shrink-0">
-            {prompt.message_type}
           </Badge>
         </div>
         <p className="text-sm text-muted-foreground truncate">
@@ -193,8 +177,6 @@ function PromptListItem({ prompt, onEdit, onDelete }: PromptListItemProps) {
 
 export function PromptsPage() {
   const navigate = useNavigate();
-  const { id } = useParams<{ id: string }>();
-  const location = useLocation();
 
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [search, setSearch] = useState('');
@@ -202,8 +184,6 @@ export function PromptsPage() {
   const [page, setPage] = useState(1);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [promptToDelete, setPromptToDelete] = useState<number | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingPromptId, setEditingPromptId] = useState<number | null>(null);
 
   const pageSize = 12;
 
@@ -215,20 +195,6 @@ export function PromptsPage() {
   });
 
   const deletePrompt = useDeletePrompt();
-
-  // Handle route-based form opening
-  useEffect(() => {
-    if (location.pathname === '/prompts/new') {
-      setEditingPromptId(null);
-      setFormOpen(true);
-    } else if (id) {
-      setEditingPromptId(parseInt(id));
-      setFormOpen(true);
-    } else {
-      setFormOpen(false);
-      setEditingPromptId(null);
-    }
-  }, [location.pathname, id]);
 
   const handleEdit = (promptId: number) => {
     navigate(`/prompts/${promptId}`);
@@ -249,16 +215,6 @@ export function PromptsPage() {
         console.error('Failed to delete prompt:', getErrorMessage(err));
       }
     }
-  };
-
-  const handleFormClose = () => {
-    setFormOpen(false);
-    setEditingPromptId(null);
-    navigate('/prompts');
-  };
-
-  const handleFormSuccess = () => {
-    handleFormClose();
   };
 
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
@@ -448,14 +404,6 @@ export function PromptsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Create/Edit Form Dialog */}
-      <PromptForm
-        open={formOpen}
-        onClose={handleFormClose}
-        onSuccess={handleFormSuccess}
-        promptId={editingPromptId}
-      />
     </div>
   );
 }

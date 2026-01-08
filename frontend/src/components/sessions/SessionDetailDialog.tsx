@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DeleteConfirmDialog,
 } from '@/components/ui';
 import {
   ChevronDown,
@@ -22,10 +23,14 @@ import {
   Brain,
   MessageSquare,
   Zap,
+  GitBranch,
+  Trash2,
 } from 'lucide-react';
-import { useSession, getErrorMessage } from '@/api/hooks';
+import { useSession, useDeleteSession, getErrorMessage } from '@/api/hooks';
+import { useSpanTree, useSpan } from '@/api/hooks/useSpans';
 import { SessionStatus, TraceStep, Message, TraceStepType } from '@/api/types';
 import { ContentBlockRenderer } from '@/components/chat/content-blocks';
+import { SpanTreeView, SpanDetailPanel } from '@/components/traces';
 
 function getStatusIcon(status: SessionStatus) {
   switch (status) {
@@ -174,10 +179,32 @@ export interface SessionDetailDialogProps {
 }
 
 export function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailDialogProps) {
-  const [activeTab, setActiveTab] = useState<'messages' | 'trace'>('messages');
+  const [activeTab, setActiveTab] = useState<'messages' | 'trace' | 'spans'>('messages');
+  const [selectedSpanId, setSelectedSpanId] = useState<number | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const { data: session, isLoading, error, refetch } = useSession(sessionId ?? undefined);
+  const { data: spanTree, isLoading: isLoadingSpans, refetch: refetchSpans } = useSpanTree(sessionId ?? undefined, { enabled: open && activeTab === 'spans' });
+  const { data: selectedSpan } = useSpan(sessionId ?? undefined, selectedSpanId ?? undefined, { enabled: !!selectedSpanId });
+  const deleteSession = useDeleteSession();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollIndicator, setShowScrollIndicator] = useState(false);
+
+  // Check if session can be deleted (not currently running)
+  const canDelete = session && session.status !== 'running' && session.status !== 'pending';
+
+  const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!sessionId) return;
+    deleteSession.mutate(sessionId, {
+      onSuccess: () => {
+        setShowDeleteConfirm(false);
+        onClose();
+      },
+    });
+  };
 
   // Auto-refresh while session is running or pending
   useEffect(() => {
@@ -218,6 +245,24 @@ export function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailD
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContent className="max-w-4xl h-[85vh] overflow-hidden flex flex-col">
+        {/* Delete button positioned absolutely next to close button */}
+        {session && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute right-12 top-4 h-8 w-8 text-muted-foreground hover:text-destructive"
+            onClick={handleDelete}
+            disabled={!canDelete || deleteSession.isPending}
+            aria-label={canDelete ? 'Delete session' : 'Cannot delete running session'}
+            title={canDelete ? 'Delete session' : 'Cannot delete running session'}
+          >
+            {deleteSession.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+          </Button>
+        )}
         <DialogHeader>
           <DialogTitle>
             {session?.title || `Session #${sessionId}`}
@@ -281,50 +326,86 @@ export function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailD
                 <Zap className="h-4 w-4 mr-2" />
                 Trace ({session.trace_steps?.length || 0})
               </Button>
+              <Button
+                variant={activeTab === 'spans' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setActiveTab('spans')}
+              >
+                <GitBranch className="h-4 w-4 mr-2" />
+                Spans {spanTree?.stats?.total_spans ? `(${spanTree.stats.total_spans})` : ''}
+              </Button>
             </div>
 
             {/* Content area with scroll indicator */}
             <div className="relative flex-1 min-h-0">
-              <div
-                ref={scrollContainerRef}
-                className="h-full overflow-y-auto custom-scrollbar pr-2"
-              >
-                {activeTab === 'messages' ? (
-                  <div className="space-y-4 pb-4">
-                    {session.messages && session.messages.length > 0 ? (
-                      session.messages.map((msg) => (
-                        <MessageItem key={msg.id} message={msg} />
-                      ))
-                    ) : (
-                      <p className="text-center text-muted-foreground py-8">
-                        No messages in this session.
-                      </p>
-                    )}
+              {activeTab === 'spans' ? (
+                /* Spans tab with split view */
+                <div className="h-full flex gap-2">
+                  {/* Span tree */}
+                  <div className="flex-1 min-w-0 border rounded-lg overflow-hidden">
+                    <SpanTreeView
+                      rootSpan={spanTree?.root_span || null}
+                      stats={spanTree?.stats}
+                      selectedSpanId={selectedSpanId}
+                      onSelectSpan={setSelectedSpanId}
+                      isLoading={isLoadingSpans}
+                      isRecording={session.status === 'running'}
+                      onRefresh={() => refetchSpans()}
+                    />
                   </div>
-                ) : (
-                  <div className="space-y-3 pb-4">
-                    {session.trace_steps && session.trace_steps.length > 0 ? (
-                      session.trace_steps.map((step) => (
-                        <TraceStepItem key={step.id} step={step} />
-                      ))
-                    ) : (
-                      <p className="text-center text-muted-foreground py-8">
-                        No trace steps recorded.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Scroll indicator - shows when there's more content below */}
-              {showScrollIndicator && (
-                <div className="absolute bottom-0 left-0 right-0 pointer-events-none">
-                  <div className="h-16 bg-gradient-to-t from-background via-background/80 to-transparent" />
-                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 text-xs text-muted-foreground bg-background/90 px-3 py-1 rounded-full border shadow-sm pointer-events-auto">
-                    <ChevronDown className="h-3 w-3 animate-bounce" />
-                    <span>Scroll for more</span>
+                  {/* Span detail panel */}
+                  <div className="w-80 border rounded-lg overflow-hidden flex-shrink-0">
+                    <SpanDetailPanel
+                      span={selectedSpan || null}
+                      onClose={() => setSelectedSpanId(null)}
+                    />
                   </div>
                 </div>
+              ) : (
+                /* Messages and Trace tabs with scroll */
+                <>
+                  <div
+                    ref={scrollContainerRef}
+                    className="h-full overflow-y-auto custom-scrollbar pr-2"
+                  >
+                    {activeTab === 'messages' ? (
+                      <div className="space-y-4 pb-4">
+                        {session.messages && session.messages.length > 0 ? (
+                          session.messages.map((msg) => (
+                            <MessageItem key={msg.id} message={msg} />
+                          ))
+                        ) : (
+                          <p className="text-center text-muted-foreground py-8">
+                            No messages in this session.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-3 pb-4">
+                        {session.trace_steps && session.trace_steps.length > 0 ? (
+                          session.trace_steps.map((step) => (
+                            <TraceStepItem key={step.id} step={step} />
+                          ))
+                        ) : (
+                          <p className="text-center text-muted-foreground py-8">
+                            No trace steps recorded.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Scroll indicator - shows when there's more content below */}
+                  {showScrollIndicator && (
+                    <div className="absolute bottom-0 left-0 right-0 pointer-events-none">
+                      <div className="h-16 bg-gradient-to-t from-background via-background/80 to-transparent" />
+                      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 text-xs text-muted-foreground bg-background/90 px-3 py-1 rounded-full border shadow-sm pointer-events-auto">
+                        <ChevronDown className="h-3 w-3 animate-bounce" />
+                        <span>Scroll for more</span>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -339,6 +420,16 @@ export function SessionDetailDialog({ sessionId, open, onClose }: SessionDetailD
           </div>
         ) : null}
       </DialogContent>
+
+      {/* Delete Confirmation Dialog */}
+      <DeleteConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        itemName={session?.title || `Session #${sessionId}`}
+        itemType="session"
+        onConfirm={handleConfirmDelete}
+        isLoading={deleteSession.isPending}
+      />
     </Dialog>
   );
 }

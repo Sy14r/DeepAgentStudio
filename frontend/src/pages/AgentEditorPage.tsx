@@ -75,6 +75,7 @@ import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPaylo
 import { AgentCreateRequest, TraceStep, ContentBlock } from '@/api/types';
 import { ContentBlockRenderer } from '@/components/chat/content-blocks';
 import { SessionDetailDialog } from '@/components/sessions';
+import { PromptSelector } from '@/components/prompts';
 
 // Form schema
 const agentFormSchema = z.object({
@@ -93,6 +94,10 @@ const agentFormSchema = z.object({
   memory_type: z.string().default('buffer'),
   context_window: z.number().min(1).max(100).default(10),
   tool_ids: z.array(z.number()).default([]),
+  // Prompt configuration
+  prompt_id: z.number().nullable().default(null),
+  prompt_variables: z.record(z.string()).default({}),
+  use_prompt_library: z.boolean().default(false),
   system_prompt: z.string().max(10000, 'System prompt must be less than 10000 characters').optional(),
 });
 
@@ -358,6 +363,9 @@ export function AgentEditorPage() {
       memory_type: 'buffer',
       context_window: 10,
       tool_ids: [],
+      prompt_id: null,
+      prompt_variables: {},
+      use_prompt_library: false,
       system_prompt: 'You are a helpful AI assistant.',
     },
   });
@@ -379,6 +387,7 @@ export function AgentEditorPage() {
       const matchingProvider = providersData.providers.find(p => p.provider_type === providerType);
       const config = agent.current_version?.config;
 
+      const hasPromptId = config?.prompt_id != null;
       form.reset({
         name: agent.name,
         description: agent.description || '',
@@ -395,6 +404,9 @@ export function AgentEditorPage() {
         memory_type: config?.memory_config?.type ?? 'buffer',
         context_window: config?.memory_config?.context_window ?? 10,
         tool_ids: config?.tool_ids || [],
+        prompt_id: config?.prompt_id ?? null,
+        prompt_variables: config?.prompt_variables ?? {},
+        use_prompt_library: hasPromptId,
         system_prompt: config?.system_prompt || '',
       });
       setHasUnsavedChanges(false);
@@ -460,8 +472,9 @@ export function AgentEditorPage() {
           max_tokens: data.max_tokens,
         },
         tool_ids: data.tool_ids,
-        prompt_id: null,
-        system_prompt: data.system_prompt || null,
+        prompt_id: data.use_prompt_library ? data.prompt_id : null,
+        prompt_variables: data.use_prompt_library ? data.prompt_variables : undefined,
+        system_prompt: data.use_prompt_library ? null : (data.system_prompt || null),
         timeout_seconds: data.timeout_seconds,
         reflection_config: {
           enabled: data.reflection_enabled,
@@ -1254,26 +1267,24 @@ export function AgentEditorPage() {
                       </div>
                     )}
 
-                    <FormField
-                      control={form.control}
-                      name="system_prompt"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel className="flex items-center">
-                            System Prompt
-                            <FieldInfo tooltip={FIELD_TOOLTIPS.system_prompt} />
-                          </FormLabel>
-                          <FormControl>
-                            <Textarea
-                              placeholder="You are a helpful assistant..."
-                              className="resize-none min-h-[150px]"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                    <div className="space-y-2">
+                      <FormLabel className="flex items-center">
+                        System Prompt
+                        <FieldInfo tooltip={FIELD_TOOLTIPS.system_prompt} />
+                      </FormLabel>
+                      <PromptSelector
+                        selectedPromptId={form.watch('prompt_id')}
+                        promptVariables={form.watch('prompt_variables')}
+                        systemPromptOverride={form.watch('system_prompt') || ''}
+                        usePromptLibrary={form.watch('use_prompt_library')}
+                        onChange={(config) => {
+                          form.setValue('prompt_id', config.prompt_id);
+                          form.setValue('prompt_variables', config.prompt_variables);
+                          form.setValue('system_prompt', config.system_prompt);
+                          form.setValue('use_prompt_library', config.use_prompt_library);
+                        }}
+                      />
+                    </div>
                   </TabsContent>
                 </ScrollArea>
               </Tabs>

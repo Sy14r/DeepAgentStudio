@@ -514,3 +514,197 @@ class TestPromptAccessControl:
         )
 
         assert response.status_code == 404
+
+
+class TestPromptAnalyticsAPI:
+    """Test cases for Prompt Analytics API endpoint"""
+
+    def test_get_analytics_basic(self, client, auth_headers, test_user, db):
+        """Test getting basic analytics for a prompt"""
+        # Create prompt with version
+        prompt = Prompt(
+            user_id=test_user.id,
+            name="Analytics Test Prompt"
+        )
+        db.add(prompt)
+        db.flush()
+
+        version = PromptVersion(
+            prompt_id=prompt.id,
+            version_number=1,
+            template="Test template",
+            variables=[],
+            is_active=True,
+            usage_count=10,
+            created_by=test_user.id
+        )
+        db.add(version)
+        db.flush()
+
+        prompt.current_version_id = version.id
+        db.commit()
+
+        response = client.get(
+            f"/api/v1/prompts/{prompt.id}/analytics",
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["prompt_id"] == prompt.id
+        assert data["prompt_name"] == "Analytics Test Prompt"
+        assert data["total_usage_count"] == 10
+        assert data["total_versions"] == 1
+        assert len(data["version_usage"]) == 1
+        assert data["version_usage"][0]["usage_count"] == 10
+        assert data["version_usage"][0]["is_current"] is True
+
+    def test_get_analytics_multiple_versions(self, client, auth_headers, test_user, db):
+        """Test analytics with multiple versions"""
+        prompt = Prompt(
+            user_id=test_user.id,
+            name="Multi-Version Analytics"
+        )
+        db.add(prompt)
+        db.flush()
+
+        # Create multiple versions with different usage counts
+        version1 = PromptVersion(
+            prompt_id=prompt.id,
+            version_number=1,
+            template="Version 1",
+            variables=[],
+            is_active=True,
+            usage_count=5,
+            created_by=test_user.id
+        )
+        version2 = PromptVersion(
+            prompt_id=prompt.id,
+            version_number=2,
+            template="Version 2",
+            variables=[],
+            is_active=True,
+            usage_count=15,
+            created_by=test_user.id
+        )
+        version3 = PromptVersion(
+            prompt_id=prompt.id,
+            version_number=3,
+            template="Version 3",
+            variables=[],
+            is_active=False,  # Inactive
+            usage_count=3,
+            created_by=test_user.id
+        )
+        db.add_all([version1, version2, version3])
+        db.flush()
+
+        prompt.current_version_id = version2.id
+        db.commit()
+
+        response = client.get(
+            f"/api/v1/prompts/{prompt.id}/analytics",
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_usage_count"] == 23  # 5 + 15 + 3
+        assert data["total_versions"] == 3
+        assert data["current_version_id"] == version2.id
+
+        # Check version ordering (should be by version_number desc)
+        version_usage = data["version_usage"]
+        assert len(version_usage) == 3
+        assert version_usage[0]["version_number"] == 3
+        assert version_usage[1]["version_number"] == 2
+        assert version_usage[2]["version_number"] == 1
+
+        # Check is_current flag
+        current_versions = [v for v in version_usage if v["is_current"]]
+        assert len(current_versions) == 1
+        assert current_versions[0]["version_id"] == version2.id
+
+        # Check is_active flag
+        inactive = [v for v in version_usage if not v["is_active"]]
+        assert len(inactive) == 1
+        assert inactive[0]["version_number"] == 3
+
+    def test_get_analytics_no_versions(self, client, auth_headers, test_user, db):
+        """Test analytics for prompt with no versions"""
+        prompt = Prompt(
+            user_id=test_user.id,
+            name="No Versions Prompt"
+        )
+        db.add(prompt)
+        db.commit()
+
+        response = client.get(
+            f"/api/v1/prompts/{prompt.id}/analytics",
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_usage_count"] == 0
+        assert data["total_versions"] == 0
+        assert data["version_usage"] == []
+
+    def test_get_analytics_not_found(self, client, auth_headers):
+        """Test analytics for non-existent prompt returns 404"""
+        response = client.get(
+            "/api/v1/prompts/99999/analytics",
+            headers=auth_headers
+        )
+
+        assert response.status_code == 404
+
+    def test_get_analytics_other_user_prompt(self, client, auth_headers, second_test_user, db):
+        """Test that users cannot get analytics for other users' prompts"""
+        other_prompt = Prompt(
+            user_id=second_test_user.id,
+            name="Other User Analytics Prompt"
+        )
+        db.add(other_prompt)
+        db.commit()
+
+        response = client.get(
+            f"/api/v1/prompts/{other_prompt.id}/analytics",
+            headers=auth_headers
+        )
+
+        assert response.status_code == 404
+
+    def test_get_analytics_zero_usage(self, client, auth_headers, test_user, db):
+        """Test analytics with zero usage shows correct data"""
+        prompt = Prompt(
+            user_id=test_user.id,
+            name="Zero Usage Prompt"
+        )
+        db.add(prompt)
+        db.flush()
+
+        version = PromptVersion(
+            prompt_id=prompt.id,
+            version_number=1,
+            template="Unused template",
+            variables=[],
+            is_active=True,
+            usage_count=0,
+            created_by=test_user.id
+        )
+        db.add(version)
+        db.flush()
+
+        prompt.current_version_id = version.id
+        db.commit()
+
+        response = client.get(
+            f"/api/v1/prompts/{prompt.id}/analytics",
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_usage_count"] == 0
+        assert data["version_usage"][0]["usage_count"] == 0
