@@ -503,8 +503,10 @@ class AgentExecutorService:
                 session_metadata=session_metadata
             )
 
-            # Build and execute agent
-            result = self._execute_agent(
+            # Build and execute agent in a thread pool to avoid blocking the event loop
+            # The LangChain .invoke() calls are synchronous and would block other async operations
+            result = await asyncio.to_thread(
+                self._execute_agent,
                 execution_strategy=ctx.agent.agent_type_config.execution_strategy,
                 llm=ctx.llm,
                 tools=ctx.tools,

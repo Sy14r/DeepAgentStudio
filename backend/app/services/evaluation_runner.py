@@ -8,6 +8,7 @@ from typing import Optional, Callable, Any
 from sqlalchemy.orm import Session, joinedload, subqueryload
 
 from ..models.evaluation import (
+    Evaluation,
     EvaluationRun,
     EvaluationResult,
     EvaluationScore,
@@ -19,7 +20,7 @@ from ..models.evaluation import (
 )
 from ..schemas.evaluation import (
     EvaluationRunCreate,
-    EvaluationRunConfig,
+    EvaluationConfig,
     EvaluationProgressEvent,
     EvaluationResultEvent,
     EvaluationCompleteEvent,
@@ -60,39 +61,38 @@ class EvaluationRunner:
         self.dataset_service = DatasetService(db)
         self.evaluator_service = EvaluatorService(db)
 
-    def create_run(self, user_id: int, data: EvaluationRunCreate) -> EvaluationRun:
-        """Create a new evaluation run"""
-        # Verify dataset exists and belongs to user
-        dataset = self.dataset_service.get_dataset(data.dataset_id, user_id)
-        if not dataset:
-            raise ValueError(f"Dataset {data.dataset_id} not found")
+    def create_run(self, user_id: int, evaluation_id: int, data: EvaluationRunCreate) -> EvaluationRun:
+        """Create a new evaluation run within an evaluation"""
+        # Get evaluation with dataset info
+        evaluation = self.db.query(Evaluation).options(
+            joinedload(Evaluation.dataset),
+            joinedload(Evaluation.evaluators)
+        ).filter(
+            Evaluation.id == evaluation_id,
+            Evaluation.user_id == user_id
+        ).first()
 
-        # Verify evaluators exist and are accessible
-        evaluators = self.evaluator_service.get_evaluators_by_ids(data.evaluator_ids, user_id)
-        if len(evaluators) != len(data.evaluator_ids):
-            raise ValueError("One or more evaluators not found")
+        if not evaluation:
+            raise ValueError(f"Evaluation {evaluation_id} not found")
+
+        if not evaluation.dataset:
+            raise ValueError(f"Dataset for evaluation {evaluation_id} not found")
 
         # Create the run
         run = EvaluationRun(
             user_id=user_id,
+            evaluation_id=evaluation.id,
             name=data.name,
-            dataset_id=data.dataset_id,
             agent_id=data.agent_id,
             agent_version_id=data.agent_version_id,
             status=EvaluationStatus.PENDING.value,
             progress=0,
-            total_examples=dataset.example_count,
+            total_examples=evaluation.dataset.example_count,
             completed_examples=0,
-            config=data.config.model_dump() if data.config else {},
         )
         self.db.add(run)
         self.db.commit()
         self.db.refresh(run)
-
-        # Associate evaluators
-        for evaluator in evaluators:
-            run.evaluators.append(evaluator)
-        self.db.commit()
 
         return run
 
@@ -104,11 +104,11 @@ class EvaluationRunner:
         ).first()
 
     def get_run_with_details(self, run_id: int, user_id: int) -> Optional[EvaluationRun]:
-        """Get an evaluation run with evaluators and results loaded"""
+        """Get an evaluation run with evaluation, evaluators, and results loaded"""
         return self.db.query(EvaluationRun).options(
-            joinedload(EvaluationRun.evaluators),
+            joinedload(EvaluationRun.evaluation).joinedload(Evaluation.evaluators),
+            joinedload(EvaluationRun.evaluation).joinedload(Evaluation.dataset),
             joinedload(EvaluationRun.results).joinedload(EvaluationResult.scores),
-            joinedload(EvaluationRun.dataset),
             joinedload(EvaluationRun.agent),
         ).filter(
             EvaluationRun.id == run_id,
@@ -121,7 +121,7 @@ class EvaluationRunner:
         page: int = 1,
         page_size: int = 20,
         status: Optional[str] = None,
-        dataset_id: Optional[int] = None,
+        evaluation_id: Optional[int] = None,
         agent_id: Optional[int] = None,
     ) -> tuple[list[EvaluationRun], int]:
         """List evaluation runs with pagination"""
@@ -131,14 +131,17 @@ class EvaluationRunner:
 
         if status:
             query = query.filter(EvaluationRun.status == status)
-        if dataset_id:
-            query = query.filter(EvaluationRun.dataset_id == dataset_id)
+        if evaluation_id:
+            query = query.filter(EvaluationRun.evaluation_id == evaluation_id)
         if agent_id:
             query = query.filter(EvaluationRun.agent_id == agent_id)
 
         total = query.count()
 
-        runs = query.order_by(EvaluationRun.created_at.desc()).offset(
+        runs = query.options(
+            joinedload(EvaluationRun.evaluation),
+            joinedload(EvaluationRun.agent),
+        ).order_by(EvaluationRun.created_at.desc()).offset(
             (page - 1) * page_size
         ).limit(page_size).all()
 
@@ -163,15 +166,19 @@ class EvaluationRunner:
         self._emit_progress(run)
 
         try:
-            # Get dataset examples
-            dataset = self.dataset_service.get_dataset_with_examples(run.dataset_id, user_id)
+            # Get dataset examples from evaluation
+            if not run.evaluation or not run.evaluation.dataset:
+                raise ValueError("Evaluation or dataset not found")
+
+            dataset = self.dataset_service.get_dataset_with_examples(run.evaluation.dataset_id, user_id)
             if not dataset:
                 raise ValueError("Dataset not found")
 
             examples = list(dataset.examples)
 
-            # Apply sampling if configured
-            config = EvaluationRunConfig(**run.config) if run.config else EvaluationRunConfig()
+            # Apply sampling if configured (config comes from evaluation)
+            eval_config = run.evaluation.config or {}
+            config = EvaluationConfig(**eval_config) if eval_config else EvaluationConfig()
             if config.sample_size and config.sample_size < len(examples):
                 import random
                 if config.sample_seed:
@@ -233,7 +240,7 @@ class EvaluationRunner:
         self,
         run: EvaluationRun,
         example: DatasetExample,
-        config: EvaluationRunConfig
+        config: EvaluationConfig
     ):
         """Execute evaluation for a single example"""
         # Get the result record
@@ -279,7 +286,8 @@ class EvaluationRunner:
                 context=example.context
             )
 
-            for evaluator in run.evaluators:
+            # Run evaluators from evaluation config
+            for evaluator in run.evaluation.evaluators:
                 await self._run_evaluator(result, evaluator, evaluator_input, run)
 
             result.status = EvaluationStatus.COMPLETED.value
@@ -839,9 +847,9 @@ Evaluate based on {criteria} criteria and provide your assessment in JSON format
         scored_values = [float(s.score) for s in all_scores if s.score is not None]
         avg_score = sum(scored_values) / len(scored_values) if scored_values else 0
 
-        # Calculate per-evaluator metrics
+        # Calculate per-evaluator metrics (evaluators from evaluation config)
         evaluator_scores = {}
-        for evaluator in run.evaluators:
+        for evaluator in run.evaluation.evaluators:
             evaluator_results = [s for s in all_scores if s.evaluator_id == evaluator.id]
             if evaluator_results:
                 eval_passed = sum(1 for s in evaluator_results if s.passed is True)

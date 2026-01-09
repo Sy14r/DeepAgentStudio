@@ -11,9 +11,9 @@ from .workspace import (
     TaskStatus, SearchProviderType
 )
 from .evaluation import (
-    EvaluationDataset, DatasetExample, Evaluator, EvaluationRun, EvaluationResult, EvaluationScore,
-    EvaluatorCategory, EvaluatorType, EvaluationStatus, DatasetSchemaType,
-    evaluation_run_evaluators
+    Evaluation, EvaluationDataset, DatasetExample, Evaluator, EvaluationRun, EvaluationResult, EvaluationScore,
+    EvaluatorCategory, EvaluatorType, EvaluationStatus, EvaluationScoreStatus, DatasetSchemaType,
+    evaluation_evaluators
 )
 
 __all__ = [
@@ -27,7 +27,7 @@ __all__ = [
     "MCPServerConfig", "MCPTransportType", "agent_mcp_servers",
     "SessionWorkspace", "SessionTask", "SessionScratchpad", "SearchProviderConfig",
     "TaskStatus", "SearchProviderType",
-    "EvaluationDataset", "DatasetExample", "Evaluator", "EvaluationRun", "EvaluationResult", "EvaluationScore",
-    "EvaluatorCategory", "EvaluatorType", "EvaluationStatus", "DatasetSchemaType",
-    "evaluation_run_evaluators"
+    "Evaluation", "EvaluationDataset", "DatasetExample", "Evaluator", "EvaluationRun", "EvaluationResult", "EvaluationScore",
+    "EvaluatorCategory", "EvaluatorType", "EvaluationStatus", "EvaluationScoreStatus", "DatasetSchemaType",
+    "evaluation_evaluators"
 ]

@@ -30,6 +30,12 @@ from ...schemas.evaluation import (
     EvaluatorListResponse,
     EvaluatorTestRequest,
     EvaluatorTestResponse,
+    # Evaluation config schemas
+    EvaluationCreate,
+    EvaluationUpdate,
+    EvaluationResponse,
+    EvaluationDetailResponse,
+    EvaluationListResponse,
     # Run schemas
     EvaluationRunCreate,
     EvaluationRunResponse,
@@ -44,6 +50,7 @@ from ...schemas.evaluation import (
 )
 from ...services.dataset_service import DatasetService
 from ...services.evaluator_service import EvaluatorService
+from ...services.evaluation_service import EvaluationService
 from ...services.evaluation_runner import EvaluationRunner
 from ...services.evaluator_engine import run_evaluator, EvaluatorInput
 
@@ -452,41 +459,133 @@ async def seed_builtin_evaluators(
     return {"message": f"Seeded {created} built-in evaluators"}
 
 
-# ===== Evaluation Run Endpoints =====
+# ===== Evaluation Config Endpoints =====
 
-@router.post("/runs", response_model=EvaluationRunResponse)
+@router.post("", response_model=EvaluationResponse)
+async def create_evaluation(
+    data: EvaluationCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new reusable evaluation configuration"""
+    service = EvaluationService(db)
+    try:
+        evaluation = service.create_evaluation(current_user.id, data)
+        return _build_evaluation_response(evaluation)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("", response_model=EvaluationListResponse)
+async def list_evaluations(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    search: Optional[str] = None,
+    dataset_id: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all evaluations for the current user"""
+    service = EvaluationService(db)
+    evaluations, total = service.list_evaluations(
+        current_user.id,
+        page=page,
+        page_size=page_size,
+        search=search,
+        dataset_id=dataset_id,
+        is_active=is_active,
+    )
+    return EvaluationListResponse(
+        evaluations=[_build_evaluation_response(e) for e in evaluations],
+        total=total,
+        page=page,
+        page_size=page_size
+    )
+
+
+@router.get("/{evaluation_id}", response_model=EvaluationDetailResponse)
+async def get_evaluation(
+    evaluation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get an evaluation configuration with details"""
+    service = EvaluationService(db)
+    evaluation = service.get_evaluation_with_details(evaluation_id, current_user.id)
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    return _build_evaluation_detail_response(evaluation)
+
+
+@router.put("/{evaluation_id}", response_model=EvaluationResponse)
+async def update_evaluation(
+    evaluation_id: int,
+    data: EvaluationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update an evaluation configuration"""
+    service = EvaluationService(db)
+    try:
+        evaluation = service.update_evaluation(evaluation_id, current_user.id, data)
+        if not evaluation:
+            raise HTTPException(status_code=404, detail="Evaluation not found")
+        return _build_evaluation_response(evaluation)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{evaluation_id}")
+async def delete_evaluation(
+    evaluation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete an evaluation and all its runs"""
+    service = EvaluationService(db)
+    success = service.delete_evaluation(evaluation_id, current_user.id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    return {"message": "Evaluation deleted"}
+
+
+# ===== Evaluation Run Endpoints (nested under evaluation) =====
+
+@router.post("/{evaluation_id}/runs", response_model=EvaluationRunResponse)
 async def create_run(
+    evaluation_id: int,
     data: EvaluationRunCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create a new evaluation run"""
+    """Create a new run for an evaluation (specify agent to test)"""
     runner = EvaluationRunner(db)
     try:
-        run = runner.create_run(current_user.id, data)
+        run = runner.create_run(current_user.id, evaluation_id, data)
         return _build_run_response(run)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/runs", response_model=EvaluationRunListResponse)
-async def list_runs(
+@router.get("/{evaluation_id}/runs", response_model=EvaluationRunListResponse)
+async def list_evaluation_runs(
+    evaluation_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: Optional[str] = None,
-    dataset_id: Optional[int] = None,
     agent_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List evaluation runs"""
+    """List runs for a specific evaluation"""
     runner = EvaluationRunner(db)
     runs, total = runner.list_runs(
         current_user.id,
         page=page,
         page_size=page_size,
         status=status,
-        dataset_id=dataset_id,
+        evaluation_id=evaluation_id,
         agent_id=agent_id
     )
 
@@ -536,8 +635,9 @@ async def compare_runs(
     }
 
 
-@router.get("/runs/{run_id}", response_model=EvaluationRunDetailResponse)
+@router.get("/{evaluation_id}/runs/{run_id}", response_model=EvaluationRunDetailResponse)
 async def get_run(
+    evaluation_id: int,
     run_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -548,17 +648,25 @@ async def get_run(
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
+    # Verify run belongs to the specified evaluation
+    if run.evaluation_id != evaluation_id:
+        raise HTTPException(status_code=404, detail="Run not found in this evaluation")
+
     response = _build_run_response(run)
     response_dict = response.model_dump()
+    # Get evaluation config response
+    response_dict["evaluation"] = _build_evaluation_response(run.evaluation) if run.evaluation else None
+    # Get evaluators from evaluation
     response_dict["evaluators"] = [
-        EvaluatorResponse.model_validate(e) for e in run.evaluators
+        EvaluatorResponse.model_validate(e) for e in (run.evaluation.evaluators if run.evaluation else [])
     ]
 
     return EvaluationRunDetailResponse(**response_dict)
 
 
-@router.post("/runs/{run_id}/execute", response_model=EvaluationRunResponse)
+@router.post("/{evaluation_id}/runs/{run_id}/execute", response_model=EvaluationRunResponse)
 async def execute_run(
+    evaluation_id: int,
     run_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -605,8 +713,9 @@ async def execute_run(
     return _build_run_response(run)
 
 
-@router.post("/runs/{run_id}/cancel")
+@router.post("/{evaluation_id}/runs/{run_id}/cancel")
 async def cancel_run(
+    evaluation_id: int,
     run_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -619,8 +728,9 @@ async def cancel_run(
     return {"message": "Run cancelled"}
 
 
-@router.delete("/runs/{run_id}")
+@router.delete("/{evaluation_id}/runs/{run_id}")
 async def delete_run(
+    evaluation_id: int,
     run_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -635,8 +745,9 @@ async def delete_run(
 
 # ===== Evaluation Result Endpoints =====
 
-@router.get("/runs/{run_id}/results")
+@router.get("/{evaluation_id}/runs/{run_id}/results")
 async def list_results(
+    evaluation_id: int,
     run_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -696,8 +807,9 @@ async def list_results(
         )
 
 
-@router.get("/runs/{run_id}/results/{result_id}", response_model=EvaluationResultDetailResponse)
+@router.get("/{evaluation_id}/runs/{run_id}/results/{result_id}", response_model=EvaluationResultDetailResponse)
 async def get_result(
+    evaluation_id: int,
     run_id: int,
     result_id: int,
     db: Session = Depends(get_db),
@@ -734,6 +846,35 @@ async def get_result(
 
 # ===== Helper Functions =====
 
+def _build_evaluation_response(evaluation) -> EvaluationResponse:
+    """Build evaluation response with nested info"""
+    return EvaluationResponse(
+        id=evaluation.id,
+        user_id=evaluation.user_id,
+        name=evaluation.name,
+        description=evaluation.description,
+        dataset_id=evaluation.dataset_id,
+        config=evaluation.config or {},
+        is_active=evaluation.is_active,
+        created_at=evaluation.created_at,
+        updated_at=evaluation.updated_at,
+        dataset_name=evaluation.dataset.name if evaluation.dataset else None,
+        evaluator_count=len(evaluation.evaluators) if evaluation.evaluators else 0,
+        run_count=len(evaluation.runs) if evaluation.runs else 0,
+    )
+
+
+def _build_evaluation_detail_response(evaluation) -> EvaluationDetailResponse:
+    """Build detailed evaluation response with evaluators and dataset"""
+    response = _build_evaluation_response(evaluation)
+    response_dict = response.model_dump()
+    response_dict["evaluators"] = [
+        EvaluatorResponse.model_validate(e) for e in (evaluation.evaluators or [])
+    ]
+    response_dict["dataset"] = evaluation.dataset
+    return EvaluationDetailResponse(**response_dict)
+
+
 def _build_run_response(run) -> EvaluationRunResponse:
     """Build run response with nested info and computed fields"""
     # Compute passed/failed examples from metrics
@@ -748,11 +889,19 @@ def _build_run_response(run) -> EvaluationRunResponse:
             passed_examples = int(round(completed * pass_rate))
             failed_examples = completed - passed_examples
 
+    # Get dataset name from evaluation
+    dataset_name = None
+    evaluation_name = None
+    if run.evaluation:
+        evaluation_name = run.evaluation.name
+        if run.evaluation.dataset:
+            dataset_name = run.evaluation.dataset.name
+
     return EvaluationRunResponse(
         id=run.id,
         user_id=run.user_id,
+        evaluation_id=run.evaluation_id,
         name=run.name,
-        dataset_id=run.dataset_id,
         agent_id=run.agent_id,
         agent_version_id=run.agent_version_id,
         status=run.status,
@@ -761,12 +910,12 @@ def _build_run_response(run) -> EvaluationRunResponse:
         completed_examples=run.completed_examples,
         passed_examples=passed_examples,
         failed_examples=failed_examples,
-        config=run.config or {},
         metrics=run.metrics,
         started_at=run.started_at,
         completed_at=run.completed_at,
         created_at=run.created_at,
-        dataset_name=run.dataset.name if run.dataset else None,
+        evaluation_name=evaluation_name,
+        dataset_name=dataset_name,
         agent_name=run.agent.name if run.agent else None
     )
 

@@ -67,10 +67,11 @@ const STATUS_CONFIG: Record<
 };
 
 export function RunDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id: evaluationIdParam, runId: runIdParam } = useParams<{ id: string; runId: string }>();
   const navigate = useNavigate();
 
-  const runId = id ? parseInt(id) : null;
+  const evaluationId = evaluationIdParam ? parseInt(evaluationIdParam) : null;
+  const runId = runIdParam ? parseInt(runIdParam) : null;
 
   // Results pagination
   const [resultsPage, setResultsPage] = useState(1);
@@ -79,9 +80,13 @@ export function RunDetailPage() {
   // Error state
   const [error, setError] = useState<string | null>(null);
 
-  // Data hooks
-  const { data: run, isLoading: isLoadingRun, refetch: refetchRun } = useEvaluationRun(runId ?? undefined);
+  // Data hooks - now use evaluation_id and run_id
+  const { data: run, isLoading: isLoadingRun, refetch: refetchRun } = useEvaluationRun(
+    evaluationId ?? undefined,
+    runId ?? undefined
+  );
   const { data: resultsData, isLoading: isLoadingResults } = useEvaluationResults({
+    evaluationId: evaluationId ?? 0,
     runId: runId ?? 0,
     page: resultsPage,
     pageSize: 20,
@@ -90,6 +95,7 @@ export function RunDetailPage() {
 
   // Fetch all results with scores for the matrix view (only when run exists)
   const { data: matrixResultsData, isLoading: isLoadingMatrixResults } = useEvaluationResults({
+    evaluationId: evaluationId ?? 0,
     runId: runId ?? 0,
     page: 1,
     pageSize: 200, // Backend max is 200
@@ -98,16 +104,20 @@ export function RunDetailPage() {
 
   // Fetch dataset examples for the matrix view
   const { data: datasetExamplesData, isLoading: isLoadingExamples } = useDatasetExamples({
-    datasetId: run?.dataset_id ?? 0,
+    datasetId: run?.evaluation?.dataset_id ?? 0,
     page: 1,
     pageSize: 200, // Backend max is 200
   });
 
   // Use polling for running/evaluating evaluations
-  useEvaluationRunPolling(runId ?? 0, run?.status === 'running' || run?.status === 'evaluating');
+  useEvaluationRunPolling(
+    evaluationId ?? undefined,
+    runId ?? undefined,
+    run?.status === 'running' || run?.status === 'evaluating'
+  );
 
-  const executeRun = useExecuteEvaluationRun();
-  const cancelRun = useCancelEvaluationRun();
+  const executeRun = useExecuteEvaluationRun(evaluationId ?? 0);
+  const cancelRun = useCancelEvaluationRun(evaluationId ?? 0);
 
   const handleExecute = async () => {
     if (!runId) return;
@@ -132,7 +142,11 @@ export function RunDetailPage() {
   };
 
   const handleBack = () => {
-    navigate('/evaluations');
+    if (evaluationId) {
+      navigate(`/evaluations/${evaluationId}`);
+    } else {
+      navigate('/evaluations?tab=evaluations');
+    }
   };
 
   const results = resultsData?.results || [];
@@ -167,8 +181,8 @@ export function RunDetailPage() {
   const avgScore = typeof run.metrics?.avg_score === 'number' ? run.metrics.avg_score : 0;
 
   const breadcrumbItems = [
-    { label: 'Evaluations', href: '/evaluations?tab=runs', icon: ClipboardList },
-    { label: 'Runs', href: '/evaluations?tab=runs' },
+    { label: 'Evaluations', href: '/evaluations?tab=evaluations', icon: ClipboardList },
+    { label: run.evaluation_name || 'Evaluation', href: evaluationId ? `/evaluations/${evaluationId}` : undefined },
     { label: run.name || `Run #${run.id}`, icon: PlayCircle },
   ];
 
@@ -419,7 +433,7 @@ export function RunDetailPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">Evaluators:</span>
-                  <div className="font-medium">{run.evaluators?.length || 0}</div>
+                  <div className="font-medium">{run.evaluators?.length || run.evaluation?.evaluator_count || 0}</div>
                   {run.evaluators && run.evaluators.length > 0 && (
                     <div className="text-xs text-muted-foreground truncate" title={run.evaluators.map(e => e.name).join(', ')}>
                       {run.evaluators.map(e => e.name).join(', ')}
@@ -434,8 +448,8 @@ export function RunDetailPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">Total Tests:</span>
-                  <div className="font-medium">{run.total_examples * (run.evaluators?.length || 0)}</div>
-                  <div className="text-xs text-muted-foreground">{run.total_examples} examples × {run.evaluators?.length || 0} evaluators</div>
+                  <div className="font-medium">{run.total_examples * (run.evaluators?.length || run.evaluation?.evaluator_count || 0)}</div>
+                  <div className="text-xs text-muted-foreground">{run.total_examples} examples × {run.evaluators?.length || run.evaluation?.evaluator_count || 0} evaluators</div>
                 </div>
               </div>
             </CardContent>
@@ -560,14 +574,14 @@ export function RunDetailPage() {
                                         {result.agent_output != null &&
                                           (typeof result.agent_output === 'string' ? result.agent_output : JSON.stringify(result.agent_output)).length > 40 && '...'}
                                       </div>
-                                      {(result.run_metadata as Record<string, unknown>)?.session_id && (
+                                      {!!(result.run_metadata as Record<string, unknown> | null)?.session_id && (
                                         <a
-                                          href={`/sessions/${(result.run_metadata as Record<string, unknown>).session_id}`}
+                                          href={`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`}
                                           className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
                                           title="View agent execution session"
                                           onClick={(e) => {
                                             e.preventDefault();
-                                            navigate(`/sessions/${(result.run_metadata as Record<string, unknown>).session_id}`);
+                                            navigate(`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`);
                                           }}
                                         >
                                           <ExternalLink className="h-3 w-3" />

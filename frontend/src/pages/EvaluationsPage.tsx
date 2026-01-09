@@ -12,9 +12,6 @@ import {
   Eye,
   FileText,
   Lock,
-  CheckCircle,
-  XCircle,
-  Clock,
   Loader2,
   LayoutGrid,
   List,
@@ -59,19 +56,15 @@ import {
   useEvaluators,
   useDeleteEvaluator,
   useCloneEvaluator,
-  useEvaluationRuns,
-  useCreateEvaluationRun,
-  useDeleteEvaluationRun,
-  useExecuteEvaluationRun,
-  useCancelEvaluationRun,
-  useAgents,
+  useEvaluations,
+  useCreateEvaluation,
+  useDeleteEvaluation,
   getErrorMessage,
 } from '@/api/hooks';
 import type {
   EvaluationDataset,
   Evaluator,
-  EvaluationRun,
-  EvaluationStatus,
+  Evaluation,
   EvaluatorCategory,
 } from '@/api/types';
 
@@ -85,39 +78,6 @@ function formatDate(dateString: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
-}
-
-function getStatusIcon(status: EvaluationStatus) {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle className="h-4 w-4 text-green-500" />;
-    case 'failed':
-    case 'error':
-      return <XCircle className="h-4 w-4 text-red-500" />;
-    case 'running':
-      return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
-    case 'pending':
-      return <Clock className="h-4 w-4 text-yellow-500" />;
-    case 'cancelled':
-      return <XCircle className="h-4 w-4 text-gray-500" />;
-    default:
-      return <Clock className="h-4 w-4 text-gray-500" />;
-  }
-}
-
-function getStatusBadgeVariant(status: EvaluationStatus): 'default' | 'secondary' | 'destructive' | 'outline' {
-  switch (status) {
-    case 'completed':
-      return 'default';
-    case 'failed':
-    case 'error':
-      return 'destructive';
-    case 'running':
-    case 'pending':
-      return 'secondary';
-    default:
-      return 'outline';
-  }
 }
 
 // ============================================================================
@@ -377,31 +337,24 @@ function EvaluatorListItem({ evaluator, onEdit, onDelete, onClone }: EvaluatorCa
 }
 
 // ============================================================================
-// Run Components
+// Evaluation Components (Reusable Config)
 // ============================================================================
 
-interface RunCardProps {
-  run: EvaluationRun;
+interface EvaluationCardProps {
+  evaluation: Evaluation;
   onView: () => void;
-  onExecute: () => void;
-  onCancel: () => void;
+  onEdit: () => void;
   onDelete: () => void;
-  isExecuting: boolean;
-  isCancelling: boolean;
 }
 
-function RunCard({ run, onView, onExecute, onCancel, onDelete, isExecuting, isCancelling }: RunCardProps) {
-  const passRate = run.total_examples > 0 && run.passed_examples != null
-    ? ((run.passed_examples / run.total_examples) * 100).toFixed(1)
-    : '0.0';
-
+function EvaluationCard({ evaluation, onView, onEdit, onDelete }: EvaluationCardProps) {
   return (
     <Card className="hover:shadow-md transition-shadow cursor-pointer" onClick={onView}>
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
-            {getStatusIcon(run.status)}
-            <CardTitle className="text-lg">{run.name}</CardTitle>
+            <Play className="h-5 w-5 text-muted-foreground" />
+            <CardTitle className="text-lg">{evaluation.name}</CardTitle>
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
@@ -412,94 +365,72 @@ function RunCard({ run, onView, onExecute, onCancel, onDelete, isExecuting, isCa
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onView(); }}>
                 <Eye className="h-4 w-4 mr-2" />
-                View Results
+                View & Run
               </DropdownMenuItem>
-              {run.status === 'pending' && (
-                <DropdownMenuItem
-                  onClick={(e) => { e.stopPropagation(); onExecute(); }}
-                  disabled={isExecuting}
-                >
-                  <Play className="h-4 w-4 mr-2" />
-                  {isExecuting ? 'Starting...' : 'Execute'}
-                </DropdownMenuItem>
-              )}
-              {run.status === 'running' && (
-                <DropdownMenuItem
-                  onClick={(e) => { e.stopPropagation(); onCancel(); }}
-                  disabled={isCancelling}
-                >
-                  <XCircle className="h-4 w-4 mr-2" />
-                  {isCancelling ? 'Cancelling...' : 'Cancel'}
-                </DropdownMenuItem>
-              )}
-              {run.status !== 'running' && (
-                <DropdownMenuItem
-                  onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                  className="text-destructive"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </DropdownMenuItem>
-              )}
+              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                className="text-destructive"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <CardDescription>
-          Dataset: {run.dataset_name} | Agent: {run.agent_name || 'None'}
+        <CardDescription className="line-clamp-2">
+          {evaluation.description || 'No description'}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex items-center justify-between text-sm">
           <div className="flex items-center gap-4">
-            <Badge variant={getStatusBadgeVariant(run.status)}>{run.status}</Badge>
             <span className="text-muted-foreground">
-              {run.completed_examples}/{run.total_examples} examples
+              <Database className="h-4 w-4 inline mr-1" />
+              {evaluation.dataset_name || 'Unknown dataset'}
             </span>
-            {run.status === 'completed' && (
-              <span className={`font-medium ${parseFloat(passRate) >= 80 ? 'text-green-600' : parseFloat(passRate) >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>
-                {passRate}% pass rate
-              </span>
-            )}
+            <span className="text-muted-foreground">
+              <FlaskConical className="h-4 w-4 inline mr-1" />
+              {evaluation.evaluator_count} evaluators
+            </span>
           </div>
-          <span className="text-muted-foreground text-xs">
-            {run.completed_at ? formatDate(run.completed_at) : formatDate(run.created_at)}
-          </span>
+          <Badge variant="secondary">{evaluation.run_count} runs</Badge>
+        </div>
+        <div className="text-xs text-muted-foreground mt-2">
+          {formatDate(evaluation.created_at)}
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function RunListItem({ run, onView, onExecute, onCancel, onDelete, isExecuting, isCancelling }: RunCardProps) {
-  const passRate = run.total_examples > 0 && run.passed_examples != null
-    ? ((run.passed_examples / run.total_examples) * 100).toFixed(1)
-    : '0.0';
-
+function EvaluationListItem({ evaluation, onView, onEdit, onDelete }: EvaluationCardProps) {
   return (
     <div
       className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
       onClick={onView}
     >
       <div className="flex items-center gap-4 flex-1 min-w-0">
-        {getStatusIcon(run.status)}
+        <Play className="h-5 w-5 text-muted-foreground flex-shrink-0" />
         <div className="min-w-0 flex-1">
-          <h3 className="font-medium truncate">{run.name}</h3>
+          <h3 className="font-medium truncate">{evaluation.name}</h3>
           <p className="text-sm text-muted-foreground truncate">
-            Dataset: {run.dataset_name} | Agent: {run.agent_name || 'None'}
+            {evaluation.description || 'No description'}
           </p>
         </div>
         <div className="flex items-center gap-4 text-sm">
-          <Badge variant={getStatusBadgeVariant(run.status)}>{run.status}</Badge>
           <span className="text-muted-foreground">
-            {run.completed_examples}/{run.total_examples}
+            {evaluation.dataset_name || 'Unknown'}
           </span>
-          {run.status === 'completed' && (
-            <span className={`font-medium ${parseFloat(passRate) >= 80 ? 'text-green-600' : parseFloat(passRate) >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>
-              {passRate}%
-            </span>
-          )}
+          <span className="text-muted-foreground">
+            {evaluation.evaluator_count} evaluators
+          </span>
+          <Badge variant="secondary">{evaluation.run_count} runs</Badge>
           <span className="text-muted-foreground text-xs">
-            {run.completed_at ? formatDate(run.completed_at) : formatDate(run.created_at)}
+            {formatDate(evaluation.created_at)}
           </span>
         </div>
       </div>
@@ -512,35 +443,19 @@ function RunListItem({ run, onView, onExecute, onCancel, onDelete, isExecuting, 
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onView(); }}>
             <Eye className="h-4 w-4 mr-2" />
-            View Results
+            View & Run
           </DropdownMenuItem>
-          {run.status === 'pending' && (
-            <DropdownMenuItem
-              onClick={(e) => { e.stopPropagation(); onExecute(); }}
-              disabled={isExecuting}
-            >
-              <Play className="h-4 w-4 mr-2" />
-              {isExecuting ? 'Starting...' : 'Execute'}
-            </DropdownMenuItem>
-          )}
-          {run.status === 'running' && (
-            <DropdownMenuItem
-              onClick={(e) => { e.stopPropagation(); onCancel(); }}
-              disabled={isCancelling}
-            >
-              <XCircle className="h-4 w-4 mr-2" />
-              {isCancelling ? 'Cancelling...' : 'Cancel'}
-            </DropdownMenuItem>
-          )}
-          {run.status !== 'running' && (
-            <DropdownMenuItem
-              onClick={(e) => { e.stopPropagation(); onDelete(); }}
-              className="text-destructive"
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </DropdownMenuItem>
-          )}
+          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+            <Pencil className="h-4 w-4 mr-2" />
+            Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="text-destructive"
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -557,31 +472,31 @@ export default function EvaluationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Read initial tab from URL query parameter
-  const getInitialTab = (): 'datasets' | 'evaluators' | 'runs' => {
+  const getInitialTab = (): 'datasets' | 'evaluators' | 'evaluations' => {
     const tabParam = searchParams.get('tab');
-    if (tabParam === 'evaluators' || tabParam === 'runs' || tabParam === 'datasets') {
+    if (tabParam === 'evaluators' || tabParam === 'evaluations' || tabParam === 'datasets') {
       return tabParam;
     }
     return 'datasets';
   };
 
-  const [activeTab, setActiveTab] = useState<'datasets' | 'evaluators' | 'runs'>(getInitialTab);
+  const [activeTab, setActiveTab] = useState<'datasets' | 'evaluators' | 'evaluations'>(getInitialTab);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     const saved = localStorage.getItem(EVALUATIONS_VIEW_MODE_KEY);
     return saved === 'list' ? 'list' : 'grid';
   });
 
-  // Create Run dialog state
-  const [showCreateRunDialog, setShowCreateRunDialog] = useState(false);
-  const [newRunName, setNewRunName] = useState('');
-  const [newRunDatasetId, setNewRunDatasetId] = useState<number | null>(null);
-  const [newRunAgentId, setNewRunAgentId] = useState<number | null>(null);
-  const [newRunEvaluatorIds, setNewRunEvaluatorIds] = useState<number[]>([]);
+  // Create Evaluation dialog state
+  const [showCreateEvaluationDialog, setShowCreateEvaluationDialog] = useState(false);
+  const [newEvaluationName, setNewEvaluationName] = useState('');
+  const [newEvaluationDescription, setNewEvaluationDescription] = useState('');
+  const [newEvaluationDatasetId, setNewEvaluationDatasetId] = useState<number | null>(null);
+  const [newEvaluationEvaluatorIds, setNewEvaluationEvaluatorIds] = useState<number[]>([]);
 
   // Sync tab with URL query parameter
   useEffect(() => {
     const tabParam = searchParams.get('tab');
-    if (tabParam === 'evaluators' || tabParam === 'runs' || tabParam === 'datasets') {
+    if (tabParam === 'evaluators' || tabParam === 'evaluations' || tabParam === 'datasets') {
       if (tabParam !== activeTab) {
         setActiveTab(tabParam);
       }
@@ -589,7 +504,7 @@ export default function EvaluationsPage() {
   }, [searchParams]);
 
   // Update URL when tab changes
-  const handleTabChange = (tab: 'datasets' | 'evaluators' | 'runs') => {
+  const handleTabChange = (tab: 'datasets' | 'evaluators' | 'evaluations') => {
     setActiveTab(tab);
     if (tab === 'datasets') {
       // Remove tab param for default tab
@@ -600,11 +515,11 @@ export default function EvaluationsPage() {
     setSearchParams(searchParams, { replace: true });
   };
 
-  // Open dialog when navigating to /evaluations/runs/new
+  // Open dialog when navigating to /evaluations/new
   useEffect(() => {
-    if (location.pathname === '/evaluations/runs/new') {
-      handleTabChange('runs');
-      setShowCreateRunDialog(true);
+    if (location.pathname === '/evaluations/new') {
+      handleTabChange('evaluations');
+      setShowCreateEvaluationDialog(true);
     }
   }, [location.pathname]);
 
@@ -618,10 +533,10 @@ export default function EvaluationsPage() {
   const [evaluatorCategory, setEvaluatorCategory] = useState<EvaluatorCategory | 'all'>('all');
   const [evaluatorToDelete, setEvaluatorToDelete] = useState<Evaluator | null>(null);
 
-  // Runs state
-  const [runPage, setRunPage] = useState(1);
-  const [runStatus, setRunStatus] = useState<EvaluationStatus | 'all'>('all');
-  const [runToDelete, setRunToDelete] = useState<EvaluationRun | null>(null);
+  // Evaluations state
+  const [evaluationPage, setEvaluationPage] = useState(1);
+  const [evaluationSearch, setEvaluationSearch] = useState('');
+  const [evaluationToDelete, setEvaluationToDelete] = useState<Evaluation | null>(null);
 
   // Queries
   const {
@@ -640,31 +555,26 @@ export default function EvaluationsPage() {
   });
 
   const {
-    data: runsData,
-    isLoading: runsLoading,
-    error: runsError,
-  } = useEvaluationRuns({
-    page: runPage,
-    status: runStatus === 'all' ? undefined : runStatus,
+    data: evaluationsData,
+    isLoading: evaluationsLoading,
+    error: evaluationsError,
+  } = useEvaluations({
+    page: evaluationPage,
+    search: evaluationSearch || undefined,
   });
 
-  // Agents for creating runs
-  const { data: agentsData } = useAgents({ page: 1, pageSize: 100 });
-
-  // All datasets for creating runs (separate from paginated list)
+  // All datasets for creating evaluations (separate from paginated list)
   const { data: allDatasetsData } = useDatasets({ page: 1, pageSize: 100 });
 
-  // All evaluators for creating runs (separate from paginated list)
+  // All evaluators for creating evaluations (separate from paginated list)
   const { data: allEvaluatorsData } = useEvaluators({ page: 1, pageSize: 100 });
 
   // Mutations
   const deleteDataset = useDeleteDataset();
   const deleteEvaluator = useDeleteEvaluator();
   const cloneEvaluator = useCloneEvaluator();
-  const createRun = useCreateEvaluationRun();
-  const executeRun = useExecuteEvaluationRun();
-  const cancelRun = useCancelEvaluationRun();
-  const deleteRun = useDeleteEvaluationRun();
+  const createEvaluation = useCreateEvaluation();
+  const deleteEvaluation = useDeleteEvaluation();
 
   const handleViewModeChange = (mode: 'grid' | 'list') => {
     setViewMode(mode);
@@ -680,43 +590,43 @@ export default function EvaluationsPage() {
     }
   };
 
-  const handleOpenCreateRunDialog = () => {
-    setNewRunName('');
-    setNewRunDatasetId(null);
-    setNewRunAgentId(null);
-    setNewRunEvaluatorIds([]);
-    setShowCreateRunDialog(true);
+  const handleOpenCreateEvaluationDialog = () => {
+    setNewEvaluationName('');
+    setNewEvaluationDescription('');
+    setNewEvaluationDatasetId(null);
+    setNewEvaluationEvaluatorIds([]);
+    setShowCreateEvaluationDialog(true);
   };
 
-  const handleCloseCreateRunDialog = () => {
-    setShowCreateRunDialog(false);
-    // Navigate back to /evaluations if we came from /evaluations/runs/new
-    if (location.pathname === '/evaluations/runs/new') {
-      navigate('/evaluations');
+  const handleCloseCreateEvaluationDialog = () => {
+    setShowCreateEvaluationDialog(false);
+    // Navigate back to /evaluations if we came from /evaluations/new
+    if (location.pathname === '/evaluations/new') {
+      navigate('/evaluations?tab=evaluations');
     }
   };
 
-  const handleCreateRun = async () => {
-    if (!newRunName.trim() || !newRunDatasetId || !newRunAgentId || newRunEvaluatorIds.length === 0) {
+  const handleCreateEvaluation = async () => {
+    if (!newEvaluationName.trim() || !newEvaluationDatasetId || newEvaluationEvaluatorIds.length === 0) {
       return;
     }
 
     try {
-      const run = await createRun.mutateAsync({
-        name: newRunName.trim(),
-        dataset_id: newRunDatasetId,
-        agent_id: newRunAgentId,
-        evaluator_ids: newRunEvaluatorIds,
+      const evaluation = await createEvaluation.mutateAsync({
+        name: newEvaluationName.trim(),
+        description: newEvaluationDescription.trim() || undefined,
+        dataset_id: newEvaluationDatasetId,
+        evaluator_ids: newEvaluationEvaluatorIds,
       });
-      handleCloseCreateRunDialog();
-      navigate(`/evaluations/runs/${run.id}`);
+      handleCloseCreateEvaluationDialog();
+      navigate(`/evaluations/${evaluation.id}`);
     } catch {
       // Error handled by mutation
     }
   };
 
   const toggleEvaluatorSelection = (id: number) => {
-    setNewRunEvaluatorIds((prev) =>
+    setNewEvaluationEvaluatorIds((prev) =>
       prev.includes(id) ? prev.filter((eid) => eid !== id) : [...prev, id]
     );
   };
@@ -755,12 +665,12 @@ export default function EvaluationsPage() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="runs" className="gap-2">
+            <TabsTrigger value="evaluations" className="gap-2">
               <Play className="h-4 w-4" />
-              Runs
-              {runsData && (
+              Evaluations
+              {evaluationsData && (
                 <Badge variant="secondary" className="ml-1">
-                  {runsData.total}
+                  {evaluationsData.total}
                 </Badge>
               )}
             </TabsTrigger>
@@ -797,10 +707,10 @@ export default function EvaluationsPage() {
                 New Evaluator
               </Button>
             )}
-            {activeTab === 'runs' && (
-              <Button onClick={handleOpenCreateRunDialog}>
+            {activeTab === 'evaluations' && (
+              <Button onClick={handleOpenCreateEvaluationDialog}>
                 <Plus className="h-4 w-4 mr-2" />
-                New Run
+                New Evaluation
               </Button>
             )}
           </div>
@@ -986,100 +896,87 @@ export default function EvaluationsPage() {
           )}
         </TabsContent>
 
-        {/* Runs Tab */}
-        <TabsContent value="runs">
+        {/* Evaluations Tab */}
+        <TabsContent value="evaluations">
           <div className="mb-4">
-            <Select
-              value={runStatus}
-              onValueChange={(v) => setRunStatus(v as typeof runStatus)}
-            >
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Statuses</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="running">Running</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="cancelled">Cancelled</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search evaluations..."
+                value={evaluationSearch}
+                onChange={(e) => setEvaluationSearch(e.target.value)}
+                className="pl-10"
+              />
+            </div>
           </div>
 
-          {runsLoading ? (
+          {evaluationsLoading ? (
             <div className="flex justify-center py-12">
               <Spinner size="lg" />
             </div>
-          ) : runsError ? (
+          ) : evaluationsError ? (
             <Alert variant="destructive">
-              <AlertDescription>{getErrorMessage(runsError)}</AlertDescription>
+              <AlertDescription>{getErrorMessage(evaluationsError)}</AlertDescription>
             </Alert>
-          ) : runsData?.runs.length === 0 ? (
+          ) : evaluationsData?.evaluations.length === 0 ? (
             <Card className="py-12">
               <div className="text-center">
                 <Play className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                <h3 className="text-lg font-medium mb-2">No evaluation runs yet</h3>
+                <h3 className="text-lg font-medium mb-2">No evaluations yet</h3>
                 <p className="text-muted-foreground mb-4">
-                  Create your first evaluation run to test your agents.
+                  Create an evaluation to define how you want to test your agents.
                 </p>
-                <Button onClick={handleOpenCreateRunDialog}>
+                <Button onClick={handleOpenCreateEvaluationDialog}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Create Run
+                  Create Evaluation
                 </Button>
               </div>
             </Card>
           ) : viewMode === 'grid' ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {runsData?.runs.map((run) => (
-                <RunCard
-                  key={run.id}
-                  run={run}
-                  onView={() => navigate(`/evaluations/runs/${run.id}`)}
-                  onExecute={() => executeRun.mutate(run.id)}
-                  onCancel={() => cancelRun.mutate(run.id)}
-                  onDelete={() => setRunToDelete(run)}
-                  isExecuting={executeRun.isPending}
-                  isCancelling={cancelRun.isPending}
+              {evaluationsData?.evaluations.map((evaluation) => (
+                <EvaluationCard
+                  key={evaluation.id}
+                  evaluation={evaluation}
+                  onView={() => navigate(`/evaluations/${evaluation.id}`)}
+                  onEdit={() => navigate(`/evaluations/${evaluation.id}/edit`)}
+                  onDelete={() => setEvaluationToDelete(evaluation)}
                 />
               ))}
             </div>
           ) : (
             <div className="space-y-2">
-              {runsData?.runs.map((run) => (
-                <RunListItem
-                  key={run.id}
-                  run={run}
-                  onView={() => navigate(`/evaluations/runs/${run.id}`)}
-                  onExecute={() => executeRun.mutate(run.id)}
-                  onCancel={() => cancelRun.mutate(run.id)}
-                  onDelete={() => setRunToDelete(run)}
-                  isExecuting={executeRun.isPending}
-                  isCancelling={cancelRun.isPending}
+              {evaluationsData?.evaluations.map((evaluation) => (
+                <EvaluationListItem
+                  key={evaluation.id}
+                  evaluation={evaluation}
+                  onView={() => navigate(`/evaluations/${evaluation.id}`)}
+                  onEdit={() => navigate(`/evaluations/${evaluation.id}/edit`)}
+                  onDelete={() => setEvaluationToDelete(evaluation)}
                 />
               ))}
             </div>
           )}
 
-          {runsData && runsData.total > 50 && (
+          {evaluationsData && evaluationsData.total > 50 && (
             <div className="flex items-center justify-center gap-4 mt-4">
               <Button
                 variant="outline"
                 size="sm"
-                disabled={runPage === 1}
-                onClick={() => setRunPage((p) => p - 1)}
+                disabled={evaluationPage === 1}
+                onClick={() => setEvaluationPage((p) => p - 1)}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
                 Previous
               </Button>
               <span className="text-sm text-muted-foreground">
-                Page {runPage} of {Math.ceil(runsData.total / 50)}
+                Page {evaluationPage} of {Math.ceil(evaluationsData.total / 50)}
               </span>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={runPage >= Math.ceil(runsData.total / 50)}
-                onClick={() => setRunPage((p) => p + 1)}
+                disabled={evaluationPage >= Math.ceil(evaluationsData.total / 50)}
+                onClick={() => setEvaluationPage((p) => p + 1)}
               >
                 Next
                 <ChevronRight className="h-4 w-4 ml-1" />
@@ -1119,38 +1016,49 @@ export default function EvaluationsPage() {
       />
 
       <DeleteConfirmDialog
-        open={!!runToDelete}
-        onOpenChange={(open: boolean) => !open && setRunToDelete(null)}
-        itemName={runToDelete?.name || 'run'}
-        itemType="evaluation run"
+        open={!!evaluationToDelete}
+        onOpenChange={(open: boolean) => !open && setEvaluationToDelete(null)}
+        itemName={evaluationToDelete?.name || 'evaluation'}
+        itemType="evaluation"
         onConfirm={async () => {
-          if (runToDelete) {
-            await deleteRun.mutateAsync(runToDelete.id);
-            setRunToDelete(null);
+          if (evaluationToDelete) {
+            await deleteEvaluation.mutateAsync(evaluationToDelete.id);
+            setEvaluationToDelete(null);
           }
         }}
-        isLoading={deleteRun.isPending}
+        isLoading={deleteEvaluation.isPending}
       />
 
-      {/* Create Run Dialog */}
-      <Dialog open={showCreateRunDialog} onOpenChange={(open) => !open && handleCloseCreateRunDialog()}>
+      {/* Create Evaluation Dialog */}
+      <Dialog open={showCreateEvaluationDialog} onOpenChange={(open) => !open && handleCloseCreateEvaluationDialog()}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Create Evaluation Run</DialogTitle>
+            <DialogTitle>Create Evaluation</DialogTitle>
             <DialogDescription>
-              Configure a new evaluation run to test your agent against a dataset.
+              Define a reusable evaluation configuration. You can run it against different agents later.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
-            {/* Run Name */}
+            {/* Evaluation Name */}
             <div className="space-y-2">
-              <Label htmlFor="run-name">Run Name *</Label>
+              <Label htmlFor="evaluation-name">Name *</Label>
               <Input
-                id="run-name"
-                placeholder="e.g., Math Test Run 1"
-                value={newRunName}
-                onChange={(e) => setNewRunName(e.target.value)}
+                id="evaluation-name"
+                placeholder="e.g., Math Problems Test"
+                value={newEvaluationName}
+                onChange={(e) => setNewEvaluationName(e.target.value)}
+              />
+            </div>
+
+            {/* Description */}
+            <div className="space-y-2">
+              <Label htmlFor="evaluation-description">Description</Label>
+              <Input
+                id="evaluation-description"
+                placeholder="Optional description of what this evaluation tests..."
+                value={newEvaluationDescription}
+                onChange={(e) => setNewEvaluationDescription(e.target.value)}
               />
             </div>
 
@@ -1158,8 +1066,8 @@ export default function EvaluationsPage() {
             <div className="space-y-2">
               <Label>Dataset *</Label>
               <Select
-                value={newRunDatasetId?.toString() || ''}
-                onValueChange={(v) => setNewRunDatasetId(parseInt(v))}
+                value={newEvaluationDatasetId?.toString() || ''}
+                onValueChange={(v) => setNewEvaluationDatasetId(parseInt(v))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select a dataset" />
@@ -1182,37 +1090,9 @@ export default function EvaluationsPage() {
               )}
             </div>
 
-            {/* Agent Selection */}
-            <div className="space-y-2">
-              <Label>Agent *</Label>
-              <Select
-                value={newRunAgentId?.toString() || ''}
-                onValueChange={(v) => setNewRunAgentId(parseInt(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select an agent" />
-                </SelectTrigger>
-                <SelectContent>
-                  {agentsData?.agents.map((agent) => (
-                    <SelectItem key={agent.id} value={agent.id.toString()}>
-                      {agent.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {agentsData?.agents.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  No agents available.{' '}
-                  <Button variant="link" className="p-0 h-auto" onClick={() => navigate('/agents/new')}>
-                    Create one first.
-                  </Button>
-                </p>
-              )}
-            </div>
-
             {/* Evaluators Selection */}
             <div className="space-y-2">
-              <Label>Evaluators * ({newRunEvaluatorIds.length} selected)</Label>
+              <Label>Evaluators * ({newEvaluationEvaluatorIds.length} selected)</Label>
               <div className="border rounded-md p-4 max-h-64 overflow-y-auto space-y-2">
                 {allEvaluatorsData?.evaluators.map((evaluator) => (
                   <div
@@ -1222,7 +1102,7 @@ export default function EvaluationsPage() {
                   >
                     <Checkbox
                       id={`evaluator-${evaluator.id}`}
-                      checked={newRunEvaluatorIds.includes(evaluator.id)}
+                      checked={newEvaluationEvaluatorIds.includes(evaluator.id)}
                       onClick={(e) => e.stopPropagation()}
                       onCheckedChange={() => toggleEvaluatorSelection(evaluator.id)}
                     />
@@ -1250,26 +1130,25 @@ export default function EvaluationsPage() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={handleCloseCreateRunDialog}>
+            <Button variant="outline" onClick={handleCloseCreateEvaluationDialog}>
               Cancel
             </Button>
             <Button
-              onClick={handleCreateRun}
+              onClick={handleCreateEvaluation}
               disabled={
-                !newRunName.trim() ||
-                !newRunDatasetId ||
-                !newRunAgentId ||
-                newRunEvaluatorIds.length === 0 ||
-                createRun.isPending
+                !newEvaluationName.trim() ||
+                !newEvaluationDatasetId ||
+                newEvaluationEvaluatorIds.length === 0 ||
+                createEvaluation.isPending
               }
             >
-              {createRun.isPending ? (
+              {createEvaluation.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Creating...
                 </>
               ) : (
-                'Create Run'
+                'Create Evaluation'
               )}
             </Button>
           </DialogFooter>
