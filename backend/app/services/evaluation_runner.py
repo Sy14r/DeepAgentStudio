@@ -376,6 +376,7 @@ class EvaluationRunner:
                     "input": result.tokens_input,
                     "output": result.tokens_output
                 },
+                "cost": result.cost,  # Cost in USD from model pricing
                 "latency_ms": result.total_latency_ms,
                 "chain_length": len(result.steps) if result.steps else 0,
                 "tool_calls": [

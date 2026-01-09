@@ -56,6 +56,7 @@ class ExecutionResult:
     tokens_input: int = 0
     tokens_output: int = 0
     total_latency_ms: int = 0
+    cost: float = 0.0  # Cost in USD calculated from model pricing
     steps: List[Dict[str, Any]] = None
 
     def __post_init__(self):
@@ -522,13 +523,23 @@ class AgentExecutorService:
             # Calculate metrics
             total_latency = int((time.time() - start_time) * 1000)
 
+            # Get actual token totals and cost from LLM spans (more accurate than estimates)
+            actual_tokens = {"tokens_input": 0, "tokens_output": 0, "total_tokens": 0, "cost_usd": 0.0}
+            if ctx.tracing_callback and hasattr(ctx.tracing_callback, 'recorder'):
+                actual_tokens = ctx.tracing_callback.recorder.get_token_totals()
+
+            # Use actual tokens if available, fall back to result values
+            tokens_input = actual_tokens.get("tokens_input", 0) or result.tokens_input
+            tokens_output = actual_tokens.get("tokens_output", 0) or result.tokens_output
+            cost = actual_tokens.get("cost_usd", 0.0)
+
             # Record assistant message and finish session
             ctx.recorder.record_assistant_message(result.output or "")
             ctx.recorder.finish_session(
                 status=SessionStatus.COMPLETED,
                 output=result.output,
-                tokens_input=result.tokens_input,
-                tokens_output=result.tokens_output
+                tokens_input=tokens_input,
+                tokens_output=tokens_output
             )
 
             return ExecutionResult(
@@ -536,9 +547,10 @@ class AgentExecutorService:
                 output=result.output,
                 content_blocks=result.content_blocks,
                 session_id=ctx.session.id,
-                tokens_input=result.tokens_input,
-                tokens_output=result.tokens_output,
+                tokens_input=tokens_input,
+                tokens_output=tokens_output,
                 total_latency_ms=total_latency,
+                cost=cost,
                 steps=result.steps
             )
 

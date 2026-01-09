@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -41,7 +41,21 @@ import {
   Minus,
   FlaskConical,
   ExternalLink,
+  Timer,
+  Zap,
 } from 'lucide-react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from 'recharts';
 import {
   useEvaluationRun,
   useEvaluationResults,
@@ -51,7 +65,249 @@ import {
   useDatasetExamples,
   getErrorMessage,
 } from '@/api/hooks';
-import { EvaluationStatus } from '@/api/types';
+import { EvaluationStatus, EvaluationRunDetail, EvaluationResultListResponse } from '@/api/types';
+
+// Chart colors
+const CHART_COLORS = {
+  primary: 'hsl(var(--primary))',
+  success: '#22c55e',
+  warning: '#eab308',
+  danger: '#ef4444',
+  muted: 'hsl(var(--muted-foreground))',
+};
+
+const PIE_COLORS = ['#22c55e', '#ef4444', '#eab308', '#6b7280'];
+
+interface EvaluatorScore {
+  evaluator_id: number;
+  evaluator_name: string;
+  evaluator_type: string;
+  category: string;
+  pass_rate: number;
+  avg_score: number;
+  total_evaluated: number;
+}
+
+interface RunVisualizationsProps {
+  run: EvaluationRunDetail;
+  resultsData?: EvaluationResultListResponse | null;
+}
+
+function RunVisualizations({ run, resultsData }: RunVisualizationsProps) {
+  // Extract evaluator scores from metrics
+  const evaluatorScores = useMemo(() => {
+    const scores = (run.metrics as Record<string, unknown>)?.evaluator_scores as EvaluatorScore[] | undefined;
+    if (!scores || !Array.isArray(scores)) return [];
+    return scores.map((s) => ({
+      name: s.evaluator_name.length > 12 ? s.evaluator_name.slice(0, 12) + '...' : s.evaluator_name,
+      fullName: s.evaluator_name,
+      passRate: Math.round(s.pass_rate * 100),
+      avgScore: Math.round(s.avg_score * 100),
+      type: s.evaluator_type,
+      evaluated: s.total_evaluated,
+    }));
+  }, [run.metrics]);
+
+  // Score distribution for pie chart
+  const scoreDistribution = useMemo(() => {
+    const passed = run.passed_examples || 0;
+    const failed = run.failed_examples || 0;
+    const total = run.total_examples || 0;
+    const other = total - passed - failed;
+
+    const data = [];
+    if (passed > 0) data.push({ name: 'Passed', value: passed, color: PIE_COLORS[0] });
+    if (failed > 0) data.push({ name: 'Failed', value: failed, color: PIE_COLORS[1] });
+    if (other > 0) data.push({ name: 'Other', value: other, color: PIE_COLORS[3] });
+    return data;
+  }, [run]);
+
+  // Latency distribution from results
+  const latencyData = useMemo(() => {
+    if (!resultsData?.results) return [];
+
+    const buckets = [
+      { range: '<1s', min: 0, max: 1000, count: 0 },
+      { range: '1-5s', min: 1000, max: 5000, count: 0 },
+      { range: '5-10s', min: 5000, max: 10000, count: 0 },
+      { range: '10-30s', min: 10000, max: 30000, count: 0 },
+      { range: '30s+', min: 30000, max: Infinity, count: 0 },
+    ];
+
+    resultsData.results.forEach((result) => {
+      const latency = result.latency_ms || 0;
+      for (const bucket of buckets) {
+        if (latency >= bucket.min && latency < bucket.max) {
+          bucket.count++;
+          break;
+        }
+      }
+    });
+
+    return buckets.filter((b) => b.count > 0).map((b) => ({
+      range: b.range,
+      count: b.count,
+    }));
+  }, [resultsData]);
+
+  // Resource usage stats
+  const resourceStats = useMemo(() => {
+    const metrics = run.metrics as Record<string, unknown> | null;
+    if (!metrics) return null;
+
+    const totalTokens = (metrics.total_tokens as number) || 0;
+    const totalCost = (metrics.total_cost as number) || 0;
+    const avgLatency = (metrics.avg_latency_ms as number) || 0;
+
+    return {
+      totalTokens,
+      totalCost,
+      avgLatency,
+    };
+  }, [run.metrics]);
+
+  if (!evaluatorScores.length && !scoreDistribution.length) {
+    return null;
+  }
+
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Evaluator Performance Chart */}
+      {evaluatorScores.length > 0 && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <FlaskConical className="h-4 w-4 text-muted-foreground" />
+            Evaluator Performance
+          </div>
+          <div className="h-32">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={evaluatorScores} layout="vertical" margin={{ left: 0, right: 8, top: 0, bottom: 0 }}>
+                <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 10 }} />
+                <YAxis type="category" dataKey="name" width={70} tick={{ fontSize: 10 }} />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-popover border rounded-lg shadow-lg p-2 text-xs">
+                        <p className="font-medium">{data.fullName}</p>
+                        <p>Pass Rate: {data.passRate}%</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="passRate" fill={CHART_COLORS.primary} radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Score Distribution Pie Chart */}
+      {scoreDistribution.length > 0 && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            Results
+          </div>
+          <div className="h-32">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={scoreDistribution}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={30}
+                  outerRadius={50}
+                  paddingAngle={2}
+                  dataKey="value"
+                >
+                  {scoreDistribution.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-popover border rounded-lg shadow-lg p-2 text-xs">
+                        <p className="font-medium">{data.name}: {data.value}</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: '10px' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Latency Distribution */}
+      {latencyData.length > 0 && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <Timer className="h-4 w-4 text-muted-foreground" />
+            Latency
+          </div>
+          <div className="h-32">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={latencyData} margin={{ left: 0, right: 8, top: 0, bottom: 0 }}>
+                <XAxis dataKey="range" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} width={25} />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-popover border rounded-lg shadow-lg p-2 text-xs">
+                        <p className="font-medium">{data.range}: {data.count}</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="count" fill={CHART_COLORS.warning} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Resource Usage Summary */}
+      {resourceStats && (resourceStats.totalTokens > 0 || resourceStats.avgLatency > 0) && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <Zap className="h-4 w-4 text-muted-foreground" />
+            Resources
+          </div>
+          <div className="h-32 flex flex-col justify-center gap-2">
+            <div className="text-center p-2 bg-muted/50 rounded">
+              <div className="text-lg font-bold">{resourceStats.totalTokens.toLocaleString()}</div>
+              <div className="text-xs text-muted-foreground">Tokens</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="text-center p-2 bg-muted/50 rounded">
+                <div className="text-sm font-bold">
+                  {resourceStats.avgLatency > 1000
+                    ? `${(resourceStats.avgLatency / 1000).toFixed(1)}s`
+                    : `${Math.round(resourceStats.avgLatency)}ms`}
+                </div>
+                <div className="text-xs text-muted-foreground">Latency</div>
+              </div>
+              <div className="text-center p-2 bg-muted/50 rounded">
+                <div className="text-sm font-bold">
+                  {resourceStats.totalCost > 0 ? `$${resourceStats.totalCost.toFixed(2)}` : '-'}
+                </div>
+                <div className="text-xs text-muted-foreground">Cost</div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
 
 const STATUS_CONFIG: Record<
   EvaluationStatus,
@@ -383,6 +639,11 @@ export function RunDetailPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Visualizations - show prominently when run has completed */}
+          {run.status === 'completed' && run.metrics && (
+            <RunVisualizations run={run} resultsData={matrixResultsData} />
+          )}
 
           {/* Metrics breakdown */}
           {run.metrics && Object.keys(run.metrics).length > 0 && (

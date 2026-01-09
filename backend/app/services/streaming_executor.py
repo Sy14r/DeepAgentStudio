@@ -212,6 +212,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 tokens_input=tokens_input,
                 tokens_output=tokens_output,
                 total_latency_ms=total_latency,
+                cost=cost_usd or 0.0,
                 steps=result.steps
             )
 
