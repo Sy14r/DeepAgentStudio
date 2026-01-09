@@ -18,6 +18,10 @@ import {
   SessionsPage,
   TraceExplorerPage,
   SettingsPage,
+  EvaluationsPage,
+  DatasetEditorPage,
+  EvaluatorEditorPage,
+  RunDetailPage,
 } from '@/pages';
 
 function App() {
@@ -87,6 +91,15 @@ function App() {
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="sessions/:id" element={<SessionsPage />} />
         <Route path="sessions/:id/trace" element={<TraceExplorerPage />} />
+
+        {/* Evaluations */}
+        <Route path="evaluations" element={<EvaluationsPage />} />
+        <Route path="evaluations/datasets/new" element={<DatasetEditorPage />} />
+        <Route path="evaluations/datasets/:id" element={<DatasetEditorPage />} />
+        <Route path="evaluations/evaluators/new" element={<EvaluatorEditorPage />} />
+        <Route path="evaluations/evaluators/:id" element={<EvaluatorEditorPage />} />
+        <Route path="evaluations/runs/new" element={<EvaluationsPage />} />
+        <Route path="evaluations/runs/:id" element={<RunDetailPage />} />
 
         {/* Settings */}
         <Route path="settings" element={<SettingsPage />} />

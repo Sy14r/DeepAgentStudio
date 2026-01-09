@@ -10,6 +10,7 @@ import {
   Settings,
   ChevronLeft,
   Eye,
+  FlaskConical,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/stores/uiStore';
@@ -36,6 +37,7 @@ const managementNavItems: NavItem[] = [
 
 const activityNavItems: NavItem[] = [
   { title: 'Sessions', href: '/sessions', icon: History },
+  { title: 'Evaluations', href: '/evaluations', icon: FlaskConical },
 ];
 
 // Settings is now handled directly in the footer section

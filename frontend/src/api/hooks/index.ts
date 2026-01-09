@@ -81,3 +81,42 @@ export type {
   SpanStartPayload,
   SpanEndPayload,
 } from './useAgentWebSocket';
+export {
+  // Dataset hooks
+  useDatasets,
+  useDataset,
+  useCreateDataset,
+  useUpdateDataset,
+  useDeleteDataset,
+  useDatasetExamples,
+  useDatasetExample,
+  useCreateDatasetExample,
+  useCreateDatasetExamplesBatch,
+  useUpdateDatasetExample,
+  useDeleteDatasetExample,
+  useDeleteDatasetExamplesBatch,
+  useImportDataset,
+  useExportDataset,
+  // Evaluator hooks
+  useEvaluators,
+  useEvaluator,
+  useCreateEvaluator,
+  useUpdateEvaluator,
+  useDeleteEvaluator,
+  useCloneEvaluator,
+  useTestEvaluator,
+  useSeedBuiltinEvaluators,
+  // Evaluation run hooks
+  useEvaluationRuns,
+  useEvaluationRun,
+  useCreateEvaluationRun,
+  useExecuteEvaluationRun,
+  useCancelEvaluationRun,
+  useDeleteEvaluationRun,
+  useEvaluationRunPolling,
+  // Evaluation result hooks
+  useEvaluationResults,
+  useEvaluationResult,
+  // Comparison hooks
+  useCompareRuns,
+} from './useEvaluations';

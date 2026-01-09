@@ -1,6 +1,13 @@
 """
 Test configuration and fixtures for DeepAgentStudio backend tests.
+
+This module supports both PostgreSQL (recommended for full testing) and SQLite
+(for quick unit tests that don't require PostgreSQL-specific features).
+
+Set TEST_DATABASE_URL environment variable to use PostgreSQL:
+    export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/testdb
 """
+import os
 import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
@@ -15,25 +22,33 @@ from app.models.mcp_server import MCPServerConfig, MCPTransportType
 from app.security import hash_password
 from app.encryption import encrypt_api_key
 
-# Use in-memory SQLite database for testing
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+# Check for PostgreSQL test database URL
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
-# Create test engine with StaticPool to share the same connection
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+if TEST_DATABASE_URL:
+    # Use PostgreSQL for testing (supports JSONB, ARRAY, etc.)
+    engine = create_engine(TEST_DATABASE_URL)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    USE_POSTGRES = True
+else:
+    # Fall back to SQLite for basic tests
+    # Note: Tests using PostgreSQL-specific types (JSONB) will fail with SQLite
+    SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
 
-# Enable foreign key constraints for SQLite
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_conn, connection_record):
-    cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
+    # Enable foreign key constraints for SQLite
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
-# Create session factory for tests
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    USE_POSTGRES = False
 
 
 @pytest.fixture(scope="function")
@@ -54,16 +69,30 @@ def db():
         yield db
     finally:
         db.close()
-        # Disable foreign keys before dropping tables to avoid constraint errors
-        with engine.connect() as conn:
-            conn.execute(text("PRAGMA foreign_keys=OFF"))
-            conn.commit()
-        # Drop all tables after test
-        Base.metadata.drop_all(bind=engine)
-        # Re-enable foreign keys for next test
-        with engine.connect() as conn:
-            conn.execute(text("PRAGMA foreign_keys=ON"))
-            conn.commit()
+
+        if USE_POSTGRES:
+            # PostgreSQL: Truncate all tables for clean state
+            with engine.connect() as conn:
+                # Disable foreign key checks temporarily
+                conn.execute(text("SET session_replication_role = 'replica'"))
+                # Get all table names and truncate
+                for table in reversed(Base.metadata.sorted_tables):
+                    try:
+                        conn.execute(text(f'TRUNCATE TABLE "{table.name}" CASCADE'))
+                    except Exception:
+                        pass  # Table might not exist yet
+                # Re-enable foreign key checks
+                conn.execute(text("SET session_replication_role = 'origin'"))
+                conn.commit()
+        else:
+            # SQLite: Drop and recreate tables
+            with engine.connect() as conn:
+                conn.execute(text("PRAGMA foreign_keys=OFF"))
+                conn.commit()
+            Base.metadata.drop_all(bind=engine)
+            with engine.connect() as conn:
+                conn.execute(text("PRAGMA foreign_keys=ON"))
+                conn.commit()
 
 
 @pytest.fixture(scope="function")

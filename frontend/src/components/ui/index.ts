@@ -14,6 +14,7 @@ export {
 } from './alert-dialog';
 export { Avatar, AvatarImage, AvatarFallback } from './avatar';
 export { Badge, badgeVariants } from './badge';
+export { Breadcrumb, type BreadcrumbItem, type BreadcrumbProps } from './breadcrumb';
 export { Button, buttonVariants } from './button';
 export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent } from './card';
 export { Checkbox } from './checkbox';

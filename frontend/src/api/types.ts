@@ -712,3 +712,286 @@ export interface SpanListResponse {
   page: number;
   page_size: number;
 }
+
+// ============================================================================
+// Evaluation System Types (Phase 5)
+// ============================================================================
+
+// Enums
+export type EvaluatorCategory = 'output' | 'run_metadata';
+
+export type EvaluatorType =
+  // Output evaluators
+  | 'exact_match'
+  | 'contains'
+  | 'regex_match'
+  | 'json_match'
+  | 'semantic_similarity'
+  | 'llm_judge'
+  | 'custom_code'
+  // Run metadata evaluators
+  | 'token_efficiency'
+  | 'latency_threshold'
+  | 'cost_threshold'
+  | 'chain_length'
+  | 'tool_call_success_rate'
+  | 'tool_selection'
+  | 'error_rate'
+  | 'span_count'
+  | 'custom_metadata';
+
+export type EvaluationStatus = 'pending' | 'running' | 'evaluating' | 'completed' | 'failed' | 'cancelled' | 'error';
+
+export type EvaluationScoreStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export type DatasetSchemaType = 'text' | 'structured';
+
+// Dataset Types
+export interface EvaluationDataset {
+  id: number;
+  user_id: number;
+  name: string;
+  description: string | null;
+  schema_type: DatasetSchemaType;
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+  tags: string[] | null;
+  example_count: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface DatasetExample {
+  id: number;
+  dataset_id: number;
+  name: string | null;
+  input: unknown;
+  expected_output: unknown;
+  context: unknown | null;
+  metadata: Record<string, unknown> | null;
+  tags: string[] | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface DatasetCreateRequest {
+  name: string;
+  description?: string;
+  schema_type?: DatasetSchemaType;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  tags?: string[];
+}
+
+export interface DatasetUpdateRequest {
+  name?: string;
+  description?: string;
+  schema_type?: DatasetSchemaType;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  tags?: string[];
+  is_active?: boolean;
+}
+
+export interface DatasetExampleCreateRequest {
+  name?: string;
+  input: unknown;
+  expected_output: unknown;
+  context?: unknown;
+  metadata?: Record<string, unknown>;
+  tags?: string[];
+}
+
+export interface DatasetExampleUpdateRequest {
+  name?: string;
+  input?: unknown;
+  expected_output?: unknown;
+  context?: unknown;
+  metadata?: Record<string, unknown>;
+  tags?: string[];
+}
+
+export interface DatasetListResponse {
+  datasets: EvaluationDataset[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface DatasetExampleListResponse {
+  examples: DatasetExample[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// Evaluator Types
+export interface Evaluator {
+  id: number;
+  user_id: number | null;
+  name: string;
+  type: EvaluatorType;
+  category: EvaluatorCategory;
+  description: string | null;
+  config: Record<string, unknown>;
+  is_builtin: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface EvaluatorCreateRequest {
+  name: string;
+  type: EvaluatorType;
+  category: EvaluatorCategory;
+  description?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface EvaluatorUpdateRequest {
+  name?: string;
+  description?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface EvaluatorListResponse {
+  evaluators: Evaluator[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface EvaluatorTestRequest {
+  input: string;
+  expected_output: string;
+  actual_output: string;
+  run_metadata?: Record<string, unknown>;
+}
+
+export interface EvaluatorTestResult {
+  passed: boolean;
+  score: number;
+  message: string | null;
+  details: Record<string, unknown> | null;
+}
+
+// Evaluation Run Types
+export interface EvaluationRunConfig {
+  sample_size?: number;
+  sample_seed?: number;
+  max_concurrency?: number;
+  timeout_seconds?: number;
+  retry_count?: number;
+}
+
+export interface EvaluationRun {
+  id: number;
+  user_id: number;
+  name: string;
+  dataset_id: number;
+  dataset_name: string;
+  agent_id: number | null;
+  agent_name: string | null;
+  agent_version_id: number | null;
+  status: EvaluationStatus;
+  config: EvaluationRunConfig | null;
+  metrics: Record<string, unknown> | null;
+  total_examples: number;
+  completed_examples: number;
+  passed_examples: number;
+  failed_examples: number;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface EvaluationRunDetail extends EvaluationRun {
+  evaluators: Evaluator[];
+}
+
+export interface EvaluationRunCreateRequest {
+  name: string;
+  dataset_id: number;
+  agent_id?: number;
+  agent_version_id?: number;
+  evaluator_ids: number[];
+  config?: EvaluationRunConfig;
+}
+
+export interface EvaluationRunListResponse {
+  runs: EvaluationRun[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// Evaluation Result Types
+export interface EvaluationScore {
+  id: number;
+  result_id: number;
+  evaluator_id: number;
+  evaluator_name: string;
+  passed: boolean | null;
+  score: number | null;
+  message: string | null;
+  details: Record<string, unknown> | null;
+  score_metadata: Record<string, unknown> | null;
+  status: EvaluationScoreStatus;
+  session_id: number | null;
+}
+
+export interface EvaluationResult {
+  id: number;
+  run_id: number;
+  example_id: number;
+  example_name: string | null;
+  // These fields match the backend response schema
+  example_input: unknown;
+  example_expected_output: unknown;
+  agent_output: unknown;
+  // Computed fields (can be null if scores not yet computed)
+  passed: boolean | null;
+  aggregate_score: number | null;
+  run_metadata: Record<string, unknown> | null;
+  latency_ms: number | null;
+  token_usage_input: number;
+  token_usage_output: number;
+  cost: number | null;
+  status: EvaluationStatus;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+  // Optional scores (included when requested via include_scores=true)
+  scores?: EvaluationScore[];
+}
+
+export interface EvaluationResultDetail extends EvaluationResult {
+  scores: EvaluationScore[];
+}
+
+export interface EvaluationResultListResponse {
+  results: EvaluationResult[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// Run Comparison Types
+export interface RunComparisonMetrics {
+  run_id: number;
+  run_name: string;
+  agent_name: string | null;
+  agent_version_id: number | null;
+  status: EvaluationStatus;
+  pass_rate: number;
+  avg_score: number;
+  total_examples: number;
+  completed_at: string | null;
+}
+
+export interface RunComparisonResponse {
+  runs: RunComparisonMetrics[];
+  metrics_comparison: Record<number, Record<string, unknown>>;
+}

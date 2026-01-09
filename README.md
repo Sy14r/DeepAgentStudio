@@ -15,18 +15,20 @@ DeepAgentStudio provides developers and AI/ML engineers with a complete platform
 - **Interactive Playground**: Chat interface with WebSocket streaming and real-time trace visualization
 - **Session Recording**: Complete conversation history, execution traces, and performance metrics
 - **Trace Explorer**: Full-page hierarchical trace visualization with filtering, search, and export (LangSmith/Langfuse-style)
+- **Evaluation System**: Test agents against datasets with 17 built-in evaluators (output matching, LLM judge, run metadata analysis)
 - **LLM Provider Integration**: Support for OpenAI, Anthropic, Google, Azure OpenAI, Ollama, and LlamaCPP
 
 ## Current Status
 
-**MVP Completion: 100%**
+**MVP Completion: 100%** | **Evaluation System: In Progress**
 
 | Component | Status | Tests |
 |-----------|--------|-------|
 | Backend (7 phases) | Complete | 385+ passing |
 | Frontend (2 phases) | Complete | 135 passing |
 | Advanced Toolkit (6 phases) | Complete | Integrated |
-| **Total** | **Complete** | **520+ passing** |
+| Evaluation System | Backend Complete, Frontend In Progress | 33 test files |
+| **Total** | **Active Development** | **520+ passing** |
 
 See [STATUS.md](./STATUS.md) for detailed progress tracking.
 
@@ -215,7 +217,7 @@ A pre-configured, full-featured AI assistant available to all users:
 
 ## API Endpoints
 
-**81+ REST endpoints + WebSocket** organized by resource:
+**105+ REST endpoints + WebSocket** organized by resource:
 
 | Router | Endpoints | Description |
 |--------|-----------|-------------|
@@ -228,6 +230,7 @@ A pre-configured, full-featured AI assistant available to all users:
 | `/api/v1/sessions/.../spans` | 5 | Span list, tree, stats, traces, detail |
 | `/api/v1/llm-providers` | 8 | CRUD, test connection |
 | `/api/v1/mcp-servers` | 7 | CRUD, test connection, discover tools |
+| `/api/v1/evaluations` | 24 | Datasets, evaluators, runs, results, comparison |
 | `/api/v1/ws` | 1 | WebSocket streaming + real-time span events |
 
 Full documentation available at http://localhost:8000/docs
@@ -240,19 +243,19 @@ Full documentation available at http://localhost:8000/docs
 DeepAgentStudio/
 ├── backend/
 │   ├── app/
-│   │   ├── api/v1/        # API route handlers (incl. spans.py)
-│   │   ├── models/        # SQLAlchemy models
-│   │   ├── schemas/       # Pydantic schemas (incl. span.py)
-│   │   ├── services/      # Business logic (incl. tracing_callback.py, span_*.py)
+│   │   ├── api/v1/        # API route handlers (incl. spans.py, evaluations.py)
+│   │   ├── models/        # SQLAlchemy models (11 model files)
+│   │   ├── schemas/       # Pydantic schemas (incl. span.py, evaluation.py)
+│   │   ├── services/      # Business logic (incl. evaluation_runner.py, evaluator_engine.py)
 │   │   ├── llm/           # LLM client wrappers
 │   │   └── utils/         # Utilities (tools, workspace, model_pricing)
-│   ├── alembic/           # Database migrations (14 total)
-│   └── tests/             # pytest test files
+│   ├── alembic/           # Database migrations (15 total)
+│   └── tests/             # pytest test files (33 test files)
 ├── frontend/
 │   ├── src/
-│   │   ├── api/           # API client and hooks (incl. useSpans.ts)
+│   │   ├── api/           # API client and hooks (incl. useSpans.ts, useEvaluations.ts)
 │   │   ├── components/    # React components (incl. traces/ directory)
-│   │   ├── pages/         # Route pages (16 total incl. TraceExplorerPage)
+│   │   ├── pages/         # Route pages (20 total incl. evaluation pages)
 │   │   └── stores/        # Zustand stores (incl. spanStore.ts)
 │   └── tests/             # Vitest test files
 ├── docker-compose.yml
@@ -360,6 +363,21 @@ Key configuration (see `backend/.env.example`):
   - Rename, delete, resume sessions from detail popup
   - Cost tracking from span data with backfill support
   - View mode persistence (grid/list preference)
+- **Evaluation System Backend**:
+  - Datasets with input/output test examples
+  - 17 built-in evaluators in 2 categories (output & run metadata)
+  - Output evaluators: exact match, contains, regex, JSON match, semantic similarity, LLM judge
+  - Run metadata evaluators: token efficiency, latency, cost, chain length, tool success rate, error rate
+  - Async evaluation runner with progress tracking
+  - Run comparison and aggregate metrics
+  - 24 REST API endpoints
+
+### In Progress
+- **Evaluation System Frontend**:
+  - EvaluationsPage with tabbed interface (Datasets, Evaluators, Runs)
+  - DatasetEditorPage with examples table and import/export
+  - EvaluatorEditorPage with type-specific configuration
+  - RunDetailPage with results visualization
 
 ### Planned
 - Summary memory (LLM-based summarization)
@@ -380,6 +398,7 @@ Key configuration (see `backend/.env.example`):
 | [TESTING.md](./TESTING.md) | Testing guide |
 | [ADVANCED_AGENT_TOOLKIT_SPEC.md](./ADVANCED_AGENT_TOOLKIT_SPEC.md) | Workspace tools specification |
 | [ENHANCED_TRACING_SPEC.md](./ENHANCED_TRACING_SPEC.md) | Hierarchical tracing system specification |
+| [EVALUATIONS_SPEC.md](./EVALUATIONS_SPEC.md) | Evaluation system specification |
 
 ## License
 

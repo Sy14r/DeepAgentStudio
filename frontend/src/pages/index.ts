@@ -14,3 +14,7 @@ export { PlaygroundPage } from './PlaygroundPage';
 export { SessionsPage } from './SessionsPage';
 export { TraceExplorerPage } from './TraceExplorerPage';
 export { SettingsPage } from './SettingsPage';
+export { default as EvaluationsPage } from './EvaluationsPage';
+export { DatasetEditorPage } from './DatasetEditorPage';
+export { EvaluatorEditorPage } from './EvaluatorEditorPage';
+export { RunDetailPage } from './RunDetailPage';

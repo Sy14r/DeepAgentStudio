@@ -32,6 +32,7 @@ from .tool_wrapper import ToolLoader, load_agent_tools, WORKSPACE_TOOL_CLASSES
 from .mcp_client import MCPConnectionPool
 from .mcp_tool_wrapper import create_mcp_tools_for_agent, MCPToolWrapper
 from .session_recorder import SessionRecorder, create_session_recorder
+from .tracing_callback import create_tracing_callback
 from .memory import ConversationMemoryService
 from .workspace_tools import create_workspace_tools, WORKSPACE_TOOL_NAMES
 from .web_tools import create_web_tools, WEB_TOOL_CLASSES
@@ -62,6 +63,37 @@ class ExecutionResult:
             self.steps = []
         if self.content_blocks is None:
             self.content_blocks = []
+
+
+@dataclass
+class ExecutionContext:
+    """
+    Prepared execution context containing all resources needed for agent execution.
+
+    This dataclass centralizes all the setup that's common between streaming
+    and non-streaming execution paths, ensuring tracing is always enabled
+    and reducing code duplication.
+    """
+    # Core resources
+    agent: Any  # Agent model
+    version: Any  # AgentVersion model
+    config: Dict[str, Any]
+    session: Any  # Session model
+    recorder: Any  # SessionRecorder
+
+    # Execution resources
+    llm: Any  # LangChain LLM instance
+    tools: List[Any]  # Combined list of all tools
+    chat_history: List[Any]
+
+    # Callbacks - tracing is always present
+    tracing_callback: Any  # DeepAgentTracingCallback - always created
+
+    # Optional MCP pool for cleanup
+    mcp_pool: Optional[Any] = None
+
+    # Timeout
+    timeout_seconds: int = 30
 
 
 class AgentExecutorError(Exception):
@@ -193,6 +225,189 @@ class AgentExecutorService:
         self.db = db
         self.user_id = user_id
 
+    async def _prepare_execution(
+        self,
+        agent_id: int,
+        input_message: str,
+        session_id: Optional[int] = None,
+        config_override: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[int] = None,
+        session_title: Optional[str] = None,
+        session_metadata: Optional[Dict[str, Any]] = None,
+        websocket: Optional[Any] = None,
+        loop: Optional[Any] = None
+    ) -> ExecutionContext:
+        """
+        Prepare all resources needed for agent execution.
+
+        This method centralizes the common setup code that was previously
+        duplicated between invoke_async() and invoke_streaming(). It always
+        creates a tracing callback to ensure spans are recorded.
+
+        Args:
+            agent_id: ID of the agent to invoke
+            input_message: User's input message
+            session_id: Optional existing session ID to continue
+            config_override: Optional configuration overrides
+            timeout_seconds: Optional execution timeout
+            session_title: Optional custom session title
+            session_metadata: Optional additional session metadata
+            websocket: Optional WebSocket for streaming span events
+            loop: Optional event loop for async callback operations
+
+        Returns:
+            ExecutionContext with all prepared resources
+
+        Raises:
+            AgentNotFoundError: If agent not found
+            AgentConfigurationError: If agent misconfigured
+        """
+        # Load agent and configuration
+        agent = self._load_agent(agent_id)
+        version = self._get_agent_version(agent)
+        config = self._merge_config(version.config, config_override)
+        effective_timeout = timeout_seconds or config.get("timeout_seconds", 30)
+
+        # Create session recorder
+        recorder = create_session_recorder(
+            db=self.db,
+            agent_id=agent_id,
+            user_id=self.user_id,
+            agent_version_id=version.id,
+            session_id=session_id
+        )
+
+        # Build session metadata
+        metadata = {"input_preview": input_message[:100]}
+        if session_metadata:
+            metadata.update(session_metadata)
+
+        # Start or resume session
+        session = recorder.start_session(
+            title=session_title or f"Execution of {agent.name}",
+            metadata=metadata
+        )
+
+        # Record user message
+        recorder.record_user_message(input_message)
+
+        # Create tracing callback - ALWAYS created to ensure spans are recorded
+        # This is the core change: tracing is now a built-in part of the execution engine
+        tracing_callback = create_tracing_callback(
+            db=self.db,
+            session_id=session.id,
+            capture_inputs=True,
+            capture_outputs=True,
+            include_raw_prompts=False,
+            websocket=websocket,
+            loop=loop
+        )
+
+        # Create LLM
+        llm = self._create_llm(config)
+        recorder.record_trace_step(
+            TraceStepType.THOUGHT,
+            content=f"Created LLM: {config.get('llm_config', {}).get('model', 'unknown')}"
+        )
+
+        # Load regular tools
+        tools = self._load_tools(agent_id, config)
+
+        # Load MCP tools (if any MCP servers are assigned)
+        mcp_pool = MCPConnectionPool()
+        mcp_tools = await self._load_mcp_tools(agent_id, mcp_pool, recorder)
+
+        # Load workspace tools if any workspace tool IDs are in config
+        workspace_tools = []
+        tool_ids = config.get("tool_ids", [])
+        if tool_ids:
+            from ..models import Tool
+            workspace_tool_requested = self.db.query(Tool).filter(
+                Tool.id.in_(tool_ids),
+                Tool.langchain_class.in_(list(WORKSPACE_TOOL_CLASSES.keys()))
+            ).first()
+
+            if workspace_tool_requested:
+                workspace_tools = create_workspace_tools(self.db, session.id)
+                recorder.record_trace_step(
+                    TraceStepType.THOUGHT,
+                    content=f"Created {len(workspace_tools)} workspace tools for session {session.id}"
+                )
+
+        # Load web tools if any web tool IDs are in config
+        web_tools = []
+        if tool_ids:
+            from ..models import Tool
+            web_tool_requested = self.db.query(Tool).filter(
+                Tool.id.in_(tool_ids),
+                Tool.langchain_class.in_(list(WEB_TOOL_CLASSES.keys()))
+            ).first()
+
+            if web_tool_requested:
+                web_tools = create_web_tools()
+                recorder.record_trace_step(
+                    TraceStepType.THOUGHT,
+                    content=f"Created {len(web_tools)} web tools for research"
+                )
+
+        # Load image generation tools if any image tool IDs are in config
+        image_tools = []
+        if tool_ids:
+            from ..models import Tool
+            from .image_generation_tools import create_image_generation_tools, IMAGE_GENERATION_TOOL_CLASSES
+            image_tool_requested = self.db.query(Tool).filter(
+                Tool.id.in_(tool_ids),
+                Tool.langchain_class.in_(list(IMAGE_GENERATION_TOOL_CLASSES.keys()))
+            ).first()
+
+            if image_tool_requested:
+                image_tools = create_image_generation_tools(self.db, session.id, self.user_id)
+                recorder.record_trace_step(
+                    TraceStepType.THOUGHT,
+                    content=f"Created {len(image_tools)} image generation tools"
+                )
+
+        # Combine all tools
+        all_tools = tools + mcp_tools + workspace_tools + web_tools + image_tools
+
+        if all_tools:
+            regular_count = len(tools)
+            mcp_count = len(mcp_tools)
+            workspace_count = len(workspace_tools)
+            web_count = len(web_tools)
+            image_count = len(image_tools)
+            tool_names = [t.name for t in all_tools]
+            recorder.record_trace_step(
+                TraceStepType.THOUGHT,
+                content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP, {workspace_count} workspace, {web_count} web, {image_count} image): {tool_names}"
+            )
+
+        # Load chat history if continuing a session
+        chat_history = []
+        if session_id:
+            memory_config = config.get("memory_config", {"type": "buffer", "context_window": 10})
+            memory_service = ConversationMemoryService(self.db)
+            chat_history = memory_service.load_chat_history(session_id, memory_config)
+            if chat_history:
+                recorder.record_trace_step(
+                    TraceStepType.THOUGHT,
+                    content=f"Loaded {len(chat_history)} messages from chat history"
+                )
+
+        return ExecutionContext(
+            agent=agent,
+            version=version,
+            config=config,
+            session=session,
+            recorder=recorder,
+            llm=llm,
+            tools=all_tools,
+            chat_history=chat_history,
+            tracing_callback=tracing_callback,
+            mcp_pool=mcp_pool,
+            timeout_seconds=effective_timeout
+        )
+
     def invoke(
         self,
         agent_id: int,
@@ -246,10 +461,15 @@ class AgentExecutorService:
         session_id: Optional[int] = None,
         config_override: Optional[Dict[str, Any]] = None,
         timeout_seconds: Optional[int] = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        session_title: Optional[str] = None,
+        session_metadata: Optional[Dict[str, Any]] = None
     ) -> ExecutionResult:
         """
         Invoke an agent with a message (async version with MCP support).
+
+        Uses the shared _prepare_execution() method to set up all resources,
+        ensuring tracing is always enabled.
 
         Args:
             agent_id: ID of the agent to invoke
@@ -258,6 +478,8 @@ class AgentExecutorService:
             config_override: Optional configuration overrides
             timeout_seconds: Optional execution timeout (default from agent config)
             attachments: Optional list of attachments (images, text files, etc.)
+            session_title: Optional custom session title (defaults to "Execution of {agent.name}")
+            session_metadata: Optional additional session metadata
 
         Returns:
             ExecutionResult with output or error
@@ -267,131 +489,40 @@ class AgentExecutorService:
             AgentConfigurationError: If agent misconfigured
         """
         start_time = time.time()
-        mcp_pool = None
-
-        # Load agent
-        agent = self._load_agent(agent_id)
-        version = self._get_agent_version(agent)
-        config = self._merge_config(version.config, config_override)
-
-        # Determine timeout
-        effective_timeout = timeout_seconds or config.get("timeout_seconds", 30)
-
-        # Create session recorder
-        recorder = create_session_recorder(
-            db=self.db,
-            agent_id=agent_id,
-            user_id=self.user_id,
-            agent_version_id=version.id,
-            session_id=session_id
-        )
+        ctx: Optional[ExecutionContext] = None
 
         try:
-            # Start or resume session
-            session = recorder.start_session(
-                title=f"Execution of {agent.name}",
-                metadata={"input_preview": input_message[:100]}
+            # Prepare all execution resources (includes tracing callback)
+            ctx = await self._prepare_execution(
+                agent_id=agent_id,
+                input_message=input_message,
+                session_id=session_id,
+                config_override=config_override,
+                timeout_seconds=timeout_seconds,
+                session_title=session_title,
+                session_metadata=session_metadata
             )
-
-            # Record user message
-            recorder.record_user_message(input_message)
-
-            # Create LLM
-            llm = self._create_llm(config)
-            recorder.record_trace_step(
-                TraceStepType.THOUGHT,
-                content=f"Created LLM: {config.get('llm_config', {}).get('model', 'unknown')}"
-            )
-
-            # Load regular tools
-            tools = self._load_tools(agent_id, config)
-
-            # Load MCP tools (if any MCP servers are assigned)
-            mcp_pool = MCPConnectionPool()
-            mcp_tools = await self._load_mcp_tools(agent_id, mcp_pool, recorder)
-
-            # Load workspace tools if any workspace tool IDs are in config
-            workspace_tools = []
-            tool_ids = config.get("tool_ids", [])
-            if tool_ids:
-                # Check if any tool_ids are workspace tools
-                from ..models import Tool
-                workspace_tool_requested = self.db.query(Tool).filter(
-                    Tool.id.in_(tool_ids),
-                    Tool.langchain_class.in_(list(WORKSPACE_TOOL_CLASSES.keys()))
-                ).first()
-
-                if workspace_tool_requested:
-                    # Create workspace tools with session context
-                    workspace_tools = create_workspace_tools(self.db, session.id)
-                    recorder.record_trace_step(
-                        TraceStepType.THOUGHT,
-                        content=f"Created {len(workspace_tools)} workspace tools for session {session.id}"
-                    )
-
-            # Load web tools if any web tool IDs are in config
-            web_tools = []
-            if tool_ids:
-                # Check if any tool_ids are web tools
-                from ..models import Tool
-                web_tool_requested = self.db.query(Tool).filter(
-                    Tool.id.in_(tool_ids),
-                    Tool.langchain_class.in_(list(WEB_TOOL_CLASSES.keys()))
-                ).first()
-
-                if web_tool_requested:
-                    # Create web tools
-                    web_tools = create_web_tools()
-                    recorder.record_trace_step(
-                        TraceStepType.THOUGHT,
-                        content=f"Created {len(web_tools)} web tools for research"
-                    )
-
-            # Combine all tools
-            all_tools = tools + mcp_tools + workspace_tools + web_tools
-
-            if all_tools:
-                regular_count = len(tools)
-                mcp_count = len(mcp_tools)
-                workspace_count = len(workspace_tools)
-                web_count = len(web_tools)
-                tool_names = [t.name for t in all_tools]
-                recorder.record_trace_step(
-                    TraceStepType.THOUGHT,
-                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP, {workspace_count} workspace, {web_count} web): {tool_names}"
-                )
-
-            # Load chat history if continuing a session
-            chat_history = []
-            if session_id:
-                memory_config = config.get("memory_config", {"type": "buffer", "context_window": 10})
-                memory_service = ConversationMemoryService(self.db)
-                chat_history = memory_service.load_chat_history(session_id, memory_config)
-                if chat_history:
-                    recorder.record_trace_step(
-                        TraceStepType.THOUGHT,
-                        content=f"Loaded {len(chat_history)} messages from chat history"
-                    )
 
             # Build and execute agent
             result = self._execute_agent(
-                execution_strategy=agent.agent_type_config.execution_strategy,
-                llm=llm,
-                tools=all_tools,
+                execution_strategy=ctx.agent.agent_type_config.execution_strategy,
+                llm=ctx.llm,
+                tools=ctx.tools,
                 input_message=input_message,
-                config=config,
-                recorder=recorder,
-                timeout_seconds=effective_timeout,
-                chat_history=chat_history,
-                attachments=attachments
+                config=ctx.config,
+                recorder=ctx.recorder,
+                timeout_seconds=ctx.timeout_seconds,
+                chat_history=ctx.chat_history,
+                attachments=attachments,
+                tracing_callback=ctx.tracing_callback
             )
 
             # Calculate metrics
             total_latency = int((time.time() - start_time) * 1000)
 
             # Record assistant message and finish session
-            recorder.record_assistant_message(result.output or "")
-            recorder.finish_session(
+            ctx.recorder.record_assistant_message(result.output or "")
+            ctx.recorder.finish_session(
                 status=SessionStatus.COMPLETED,
                 output=result.output,
                 tokens_input=result.tokens_input,
@@ -402,7 +533,7 @@ class AgentExecutorService:
                 success=True,
                 output=result.output,
                 content_blocks=result.content_blocks,
-                session_id=session.id,
+                session_id=ctx.session.id,
                 tokens_input=result.tokens_input,
                 tokens_output=result.tokens_output,
                 total_latency_ms=total_latency,
@@ -411,12 +542,13 @@ class AgentExecutorService:
 
         except AgentExecutionTimeoutError as e:
             total_latency = int((time.time() - start_time) * 1000)
-            recorder.fail_session(str(e), error_type="timeout")
+            if ctx:
+                ctx.recorder.fail_session(str(e), error_type="timeout")
             return ExecutionResult(
                 success=False,
                 error=str(e),
                 error_type="timeout",
-                session_id=recorder.session_id,
+                session_id=ctx.session.id if ctx else None,
                 total_latency_ms=total_latency
             )
 
@@ -425,24 +557,25 @@ class AgentExecutorService:
             error_type = type(e).__name__
             logger.exception(f"Agent execution failed: {str(e)}")
 
-            try:
-                recorder.fail_session(str(e), error_type=error_type)
-            except Exception:
-                pass  # Session might not have started
+            if ctx:
+                try:
+                    ctx.recorder.fail_session(str(e), error_type=error_type)
+                except Exception:
+                    pass  # Session might not have started
 
             return ExecutionResult(
                 success=False,
                 error=str(e),
                 error_type=error_type,
-                session_id=recorder.session_id if recorder._session else None,
+                session_id=ctx.session.id if ctx else None,
                 total_latency_ms=total_latency
             )
 
         finally:
             # Clean up MCP connections
-            if mcp_pool:
+            if ctx and ctx.mcp_pool:
                 try:
-                    await mcp_pool.close_all()
+                    await ctx.mcp_pool.close_all()
                 except Exception as e:
                     logger.warning(f"Error closing MCP connections: {e}")
 
@@ -728,7 +861,8 @@ class AgentExecutorService:
         recorder: SessionRecorder,
         timeout_seconds: int,
         chat_history: List = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        tracing_callback=None
     ) -> ExecutionResult:
         """Execute the appropriate agent type based on execution strategy"""
         if chat_history is None:
@@ -736,15 +870,15 @@ class AgentExecutorService:
 
         if execution_strategy == ExecutionStrategy.react:
             return self._execute_react_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, attachments
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, attachments, tracing_callback
             )
         elif execution_strategy == ExecutionStrategy.plan_and_execute:
             return self._execute_plan_and_execute_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, tracing_callback
             )
         elif execution_strategy == ExecutionStrategy.conversational:
             return self._execute_conversational_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, attachments
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, attachments, tracing_callback
             )
         else:
             raise AgentConfigurationError(
@@ -760,7 +894,8 @@ class AgentExecutorService:
         recorder: SessionRecorder,
         timeout_seconds: int,
         chat_history: List = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        tracing_callback=None
     ) -> ExecutionResult:
         """Execute ReAct agent (uses tool-calling for supported models)"""
         if chat_history is None:
@@ -788,7 +923,7 @@ class AgentExecutorService:
         if use_tool_calling and tools:
             logger.info(f"Using tool-calling agent for model {model_name}")
             return self._execute_tool_calling_agent(
-                llm, tools, input_message, system_prompt, config, recorder, timeout_seconds, chat_history, attachments
+                llm, tools, input_message, system_prompt, config, recorder, timeout_seconds, chat_history, attachments, tracing_callback
             )
         elif has_images and use_tool_calling:
             # Image attachments with vision-capable model but no tools
@@ -796,12 +931,12 @@ class AgentExecutorService:
             # (tool-calling agent prompt templates don't handle multimodal content)
             logger.info(f"Using conversational mode for model {model_name} (image attachments, no tools)")
             return self._execute_conversational_agent(
-                llm, input_message, system_prompt, config, recorder, timeout_seconds, chat_history, attachments
+                llm, input_message, system_prompt, config, recorder, timeout_seconds, chat_history, attachments, tracing_callback
             )
         else:
             logger.info(f"Using text-based ReAct agent for model {model_name}")
             return self._execute_text_react_agent(
-                llm, tools, input_message, config, recorder, timeout_seconds, chat_history
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, tracing_callback
             )
 
     def _execute_tool_calling_agent(
@@ -814,7 +949,8 @@ class AgentExecutorService:
         recorder: SessionRecorder,
         timeout_seconds: int,
         chat_history: List = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        tracing_callback=None
     ) -> ExecutionResult:
         """Execute agent using native tool calling (function calling) API"""
         if chat_history is None:
@@ -834,14 +970,16 @@ class AgentExecutorService:
         # Create tool-calling agent
         agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
 
-        # Create executor
+        # Create executor with tracing callback
+        callbacks = [tracing_callback] if tracing_callback else None
         executor = LangChainAgentExecutor(
             agent=agent,
             tools=tools,
             verbose=True,
             max_iterations=config.get("max_iterations", 10),
             max_execution_time=timeout_seconds,
-            return_intermediate_steps=True
+            return_intermediate_steps=True,
+            callbacks=callbacks
         )
 
         # Execute with chat history - use multimodal content for input
@@ -903,7 +1041,8 @@ class AgentExecutorService:
         config: Dict[str, Any],
         recorder: SessionRecorder,
         timeout_seconds: int,
-        chat_history: List = None
+        chat_history: List = None,
+        tracing_callback=None
     ) -> ExecutionResult:
         """Execute text-based ReAct agent (for models without tool calling)"""
         if chat_history is None:
@@ -929,13 +1068,15 @@ class AgentExecutorService:
         # Create ReAct agent
         agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
 
-        # Create executor with callbacks for tracing
+        # Create executor with tracing callback
+        callbacks = [tracing_callback] if tracing_callback else None
         executor = LangChainAgentExecutor(
             agent=agent,
             tools=tools,
             verbose=True,
             max_iterations=config.get("max_iterations", 10),
             max_execution_time=timeout_seconds,
+            callbacks=callbacks,
             handle_parsing_errors=True,
             return_intermediate_steps=True
         )
@@ -999,7 +1140,8 @@ class AgentExecutorService:
         config: Dict[str, Any],
         recorder: SessionRecorder,
         timeout_seconds: int,
-        chat_history: List = None
+        chat_history: List = None,
+        tracing_callback=None  # Note: plan-and-execute doesn't fully support callbacks yet
     ) -> ExecutionResult:
         """Execute Plan-and-Execute agent"""
         if chat_history is None:
@@ -1070,7 +1212,8 @@ class AgentExecutorService:
         recorder: SessionRecorder,
         timeout_seconds: int,
         chat_history: List = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        tracing_callback=None
     ) -> ExecutionResult:
         """Execute Conversational agent (simple chat without tools)"""
         if chat_history is None:
@@ -1091,8 +1234,11 @@ class AgentExecutorService:
         # Add current user message (with multimodal content if images present)
         messages.append(HumanMessage(content=message_content))
 
-        # Simple LLM invocation
-        response = llm.invoke(messages)
+        # Simple LLM invocation with tracing callback
+        invoke_config = {}
+        if tracing_callback:
+            invoke_config["callbacks"] = [tracing_callback]
+        response = llm.invoke(messages, config=invoke_config)
 
         output = response.content if hasattr(response, 'content') else str(response)
 

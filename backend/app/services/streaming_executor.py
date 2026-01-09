@@ -28,6 +28,7 @@ from ..models.agent_type import ExecutionStrategy
 from ..models.session import Session, SessionStatus, TraceStepType
 from .agent_executor import (
     AgentExecutorService,
+    ExecutionContext,
     ExecutionResult,
     AgentNotFoundError,
     AgentConfigurationError,
@@ -81,6 +82,10 @@ class StreamingAgentExecutorService(AgentExecutorService):
         """
         Invoke agent with real-time streaming via WebSocket.
 
+        Uses the shared _prepare_execution() method from the parent class to set up
+        all resources, ensuring tracing is always enabled. Adds streaming-specific
+        WebSocket event handling on top.
+
         Streams events as they occur during execution:
         - session_start: When session begins
         - tool_call: When agent decides to use a tool
@@ -103,178 +108,54 @@ class StreamingAgentExecutorService(AgentExecutorService):
         """
         start_time = time.time()
         loop = asyncio.get_event_loop()
-
-        # Load agent (using parent's methods)
-        agent = self._load_agent(agent_id)
-        version = self._get_agent_version(agent)
-        config = self._merge_config(version.config, config_override)
-        effective_timeout = timeout_seconds or config.get("timeout_seconds", 30)
-
-        # Create session recorder
-        recorder = create_session_recorder(
-            db=self.db,
-            agent_id=agent_id,
-            user_id=self.user_id,
-            agent_version_id=version.id,
-            session_id=session_id
-        )
-
-        # Initialize MCP pool for cleanup in finally
-        mcp_pool = None
+        ctx: Optional[ExecutionContext] = None
+        streaming_callback: Optional[StreamingWebSocketCallbackHandler] = None
 
         try:
-            # Start session
-            session = recorder.start_session(
-                title=f"Streaming execution of {agent.name}",
-                metadata={"input_preview": input_message[:100], "streaming": True}
+            # Prepare all execution resources using parent's shared method
+            # This creates the tracing callback with WebSocket support
+            # Note: session_title will be set after we have agent info
+            ctx = await self._prepare_execution(
+                agent_id=agent_id,
+                input_message=input_message,
+                session_id=session_id,
+                config_override=config_override,
+                timeout_seconds=timeout_seconds,
+                session_metadata={"streaming": True},
+                websocket=websocket,
+                loop=loop
             )
 
             # Send session_start event
-            await self._send_event(websocket, "session_start", session.id, {
+            await self._send_event(websocket, "session_start", ctx.session.id, {
                 "agent_id": agent_id,
-                "agent_name": agent.name
+                "agent_name": ctx.agent.name
             })
 
             # Notify caller of session_id so they can start dependent tasks
             if on_session_created:
-                on_session_created(session.id)
+                on_session_created(ctx.session.id)
 
-            # Record user message
-            recorder.record_user_message(input_message)
-
-            # Note: Title generation is now handled in the WebSocket handler
-            # for immediate execution in parallel with agent invocation
-
-            # Create streaming callback handler (for WebSocket events)
+            # Create streaming callback handler (streaming-specific, for WebSocket events)
+            # This is separate from tracing_callback which handles span recording
             streaming_callback = StreamingWebSocketCallbackHandler(
                 websocket=websocket,
-                session_id=session.id,
+                session_id=ctx.session.id,
                 loop=loop
             )
-
-            # Create tracing callback handler (for hierarchical span recording + WebSocket streaming)
-            tracing_callback = create_tracing_callback(
-                db=self.db,
-                session_id=session.id,
-                capture_inputs=True,
-                capture_outputs=True,
-                include_raw_prompts=False,
-                websocket=websocket,
-                loop=loop
-            )
-
-            # Create LLM
-            llm = self._create_llm(config)
-            recorder.record_trace_step(
-                TraceStepType.THOUGHT,
-                content=f"Created LLM: {config.get('llm_config', {}).get('model', 'unknown')}"
-            )
-
-            # Load regular tools
-            tools = self._load_tools(agent_id, config)
-
-            # Load MCP tools (if any MCP servers are assigned)
-            mcp_pool = MCPConnectionPool()
-            mcp_tools = await self._load_mcp_tools(agent_id, mcp_pool, recorder)
-
-            # Load workspace tools if any workspace tool IDs are in config
-            workspace_tools = []
-            tool_ids = config.get("tool_ids", [])
-            if tool_ids:
-                # Check if any tool_ids are workspace tools
-                from ..models import Tool
-                workspace_tool_requested = self.db.query(Tool).filter(
-                    Tool.id.in_(tool_ids),
-                    Tool.langchain_class.in_(list(WORKSPACE_TOOL_CLASSES.keys()) if hasattr(self, '_workspace_tool_classes_imported') else [
-                        "WorkspaceFileRead", "WorkspaceFileWrite", "WorkspaceFileEdit",
-                        "WorkspaceFileList", "WorkspaceFileSearch",
-                        "WorkspaceTaskManager", "WorkspaceScratchpad"
-                    ])
-                ).first()
-
-                if workspace_tool_requested:
-                    # Create workspace tools with session context
-                    workspace_tools = create_workspace_tools(self.db, session.id)
-                    recorder.record_trace_step(
-                        TraceStepType.THOUGHT,
-                        content=f"Created {len(workspace_tools)} workspace tools for session {session.id}"
-                    )
-
-            # Load web tools if any web tool IDs are in config
-            web_tools = []
-            if tool_ids:
-                # Check if any tool_ids are web tools
-                from ..models import Tool
-                web_tool_requested = self.db.query(Tool).filter(
-                    Tool.id.in_(tool_ids),
-                    Tool.langchain_class.in_(list(WEB_TOOL_CLASSES.keys()))
-                ).first()
-
-                if web_tool_requested:
-                    # Create web tools
-                    web_tools = create_web_tools()
-                    recorder.record_trace_step(
-                        TraceStepType.THOUGHT,
-                        content=f"Created {len(web_tools)} web tools for research"
-                    )
-
-            # Load image generation tools if any image tool IDs are in config
-            image_tools = []
-            if tool_ids:
-                # Check if any tool_ids are image generation tools
-                from ..models import Tool
-                image_tool_requested = self.db.query(Tool).filter(
-                    Tool.id.in_(tool_ids),
-                    Tool.langchain_class.in_(list(IMAGE_GENERATION_TOOL_CLASSES.keys()))
-                ).first()
-
-                if image_tool_requested:
-                    # Create image generation tools with session and user context
-                    image_tools = create_image_generation_tools(self.db, session.id, self.user_id)
-                    recorder.record_trace_step(
-                        TraceStepType.THOUGHT,
-                        content=f"Created {len(image_tools)} image generation tools"
-                    )
-
-            # Combine all tools
-            all_tools = tools + mcp_tools + workspace_tools + web_tools + image_tools
-
-            if all_tools:
-                regular_count = len(tools)
-                mcp_count = len(mcp_tools)
-                workspace_count = len(workspace_tools)
-                web_count = len(web_tools)
-                image_count = len(image_tools)
-                tool_names = [t.name for t in all_tools]
-                recorder.record_trace_step(
-                    TraceStepType.THOUGHT,
-                    content=f"Loaded {len(all_tools)} tools ({regular_count} regular, {mcp_count} MCP, {workspace_count} workspace, {web_count} web, {image_count} image): {tool_names}"
-                )
-
-            # Load chat history if continuing session
-            chat_history = []
-            if session_id:
-                memory_config = config.get("memory_config", {"type": "buffer", "context_window": 10})
-                memory_service = ConversationMemoryService(self.db)
-                chat_history = memory_service.load_chat_history(session_id, memory_config)
-                if chat_history:
-                    recorder.record_trace_step(
-                        TraceStepType.THOUGHT,
-                        content=f"Loaded {len(chat_history)} messages from chat history"
-                    )
 
             # Execute with streaming and tracing callbacks
             result = await self._execute_agent_streaming(
-                execution_strategy=agent.agent_type_config.execution_strategy,
-                llm=llm,
-                tools=all_tools,
+                execution_strategy=ctx.agent.agent_type_config.execution_strategy,
+                llm=ctx.llm,
+                tools=ctx.tools,
                 input_message=input_message,
-                config=config,
-                recorder=recorder,
-                timeout_seconds=effective_timeout,
-                chat_history=chat_history,
+                config=ctx.config,
+                recorder=ctx.recorder,
+                timeout_seconds=ctx.timeout_seconds,
+                chat_history=ctx.chat_history,
                 streaming_callback=streaming_callback,
-                tracing_callback=tracing_callback,
+                tracing_callback=ctx.tracing_callback,
                 attachments=attachments
             )
 
@@ -283,15 +164,15 @@ class StreamingAgentExecutorService(AgentExecutorService):
 
             # Get actual token totals from LLM spans (more accurate than word-based estimates)
             actual_tokens = {"tokens_input": 0, "tokens_output": 0, "total_tokens": 0, "cost_usd": 0.0}
-            if tracing_callback and hasattr(tracing_callback, 'recorder'):
-                actual_tokens = tracing_callback.recorder.get_token_totals()
+            if ctx.tracing_callback and hasattr(ctx.tracing_callback, 'recorder'):
+                actual_tokens = ctx.tracing_callback.recorder.get_token_totals()
 
             # Use actual tokens if available, fall back to result values
             tokens_input = actual_tokens.get("tokens_input", 0) or result.tokens_input
             tokens_output = actual_tokens.get("tokens_output", 0) or result.tokens_output
 
             # Send final_answer event with content_blocks for multimodal output
-            await self._send_event(websocket, "final_answer", session.id, {
+            await self._send_event(websocket, "final_answer", ctx.session.id, {
                 "output": result.output,
                 "content_blocks": result.content_blocks or [],
                 "token_usage": {
@@ -303,13 +184,13 @@ class StreamingAgentExecutorService(AgentExecutorService):
             })
 
             # Record and finish session
-            recorder.record_assistant_message(
+            ctx.recorder.record_assistant_message(
                 result.output or "",
                 content_blocks=result.content_blocks
             )
             # Get cost from spans (actual_tokens includes cost_usd from tracing)
             cost_usd = actual_tokens.get("cost_usd", 0.0) or None
-            recorder.finish_session(
+            ctx.recorder.finish_session(
                 status=SessionStatus.COMPLETED,
                 output=result.output,
                 tokens_input=tokens_input,
@@ -318,16 +199,16 @@ class StreamingAgentExecutorService(AgentExecutorService):
             )
 
             # Send session_end event
-            await self._send_event(websocket, "session_end", session.id, {
+            await self._send_event(websocket, "session_end", ctx.session.id, {
                 "success": True,
-                "total_steps": streaming_callback.step_number
+                "total_steps": streaming_callback.step_number if streaming_callback else 0
             })
 
             return ExecutionResult(
                 success=True,
                 output=result.output,
                 content_blocks=result.content_blocks,
-                session_id=session.id,
+                session_id=ctx.session.id,
                 tokens_input=tokens_input,
                 tokens_output=tokens_output,
                 total_latency_ms=total_latency,
@@ -336,17 +217,19 @@ class StreamingAgentExecutorService(AgentExecutorService):
 
         except AgentExecutionTimeoutError as e:
             total_latency = int((time.time() - start_time) * 1000)
+            session_id_for_error = ctx.session.id if ctx else 0
 
             # Send error event
-            await self._send_event(websocket, "error", recorder.session_id, {
+            await self._send_event(websocket, "error", session_id_for_error, {
                 "error": str(e),
                 "error_type": "timeout"
             })
 
-            recorder.fail_session(str(e), error_type="timeout")
+            if ctx:
+                ctx.recorder.fail_session(str(e), error_type="timeout")
 
             # Send session_end
-            await self._send_event(websocket, "session_end", recorder.session_id, {
+            await self._send_event(websocket, "session_end", session_id_for_error, {
                 "success": False,
                 "total_steps": 0
             })
@@ -355,32 +238,34 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 success=False,
                 error=str(e),
                 error_type="timeout",
-                session_id=recorder.session_id,
+                session_id=session_id_for_error if session_id_for_error else None,
                 total_latency_ms=total_latency
             )
 
         except Exception as e:
             total_latency = int((time.time() - start_time) * 1000)
             error_type = type(e).__name__
+            session_id_for_error = ctx.session.id if ctx else 0
             logger.exception(f"Streaming agent execution failed: {str(e)}")
 
             # Send error event
             try:
-                await self._send_event(websocket, "error", recorder.session_id or 0, {
+                await self._send_event(websocket, "error", session_id_for_error, {
                     "error": str(e),
                     "error_type": error_type
                 })
             except Exception:
                 pass
 
-            try:
-                recorder.fail_session(str(e), error_type=error_type)
-            except Exception:
-                pass
+            if ctx:
+                try:
+                    ctx.recorder.fail_session(str(e), error_type=error_type)
+                except Exception:
+                    pass
 
             # Send session_end
             try:
-                await self._send_event(websocket, "session_end", recorder.session_id or 0, {
+                await self._send_event(websocket, "session_end", session_id_for_error, {
                     "success": False,
                     "total_steps": 0
                 })
@@ -391,15 +276,15 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 success=False,
                 error=str(e),
                 error_type=error_type,
-                session_id=recorder.session_id if recorder._session else None,
+                session_id=session_id_for_error if session_id_for_error else None,
                 total_latency_ms=total_latency
             )
 
         finally:
             # Clean up MCP connections
-            if mcp_pool:
+            if ctx and ctx.mcp_pool:
                 try:
-                    await mcp_pool.close_all()
+                    await ctx.mcp_pool.close_all()
                 except Exception as cleanup_error:
                     logger.warning(f"Error closing MCP connections: {cleanup_error}")
 
