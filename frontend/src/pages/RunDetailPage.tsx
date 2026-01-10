@@ -810,13 +810,18 @@ export function RunDetailPage() {
                               </td>
                               <td className="p-3 text-sm">
                                 {result ? (
-                                  result.status === 'pending' || result.status === 'running' ? (
-                                    <div className="flex items-center gap-1 text-muted-foreground">
-                                      <RefreshCw className="h-3 w-3 animate-spin" />
-                                      <span className="text-xs">Running...</span>
-                                    </div>
-                                  ) : (
-                                    <div className="flex flex-col gap-1">
+                                  <div className="flex flex-col gap-1">
+                                    {result.status === 'pending' || result.status === 'running' ? (
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <RefreshCw className="h-3 w-3 animate-spin" />
+                                        <span className="text-xs">Running...</span>
+                                      </div>
+                                    ) : result.status === 'evaluating' ? (
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <FlaskConical className="h-3 w-3 animate-pulse text-purple-500" />
+                                        <span className="text-xs">Evaluating...</span>
+                                      </div>
+                                    ) : (
                                       <div
                                         className="truncate max-w-[150px] text-muted-foreground"
                                         title={
@@ -835,22 +840,23 @@ export function RunDetailPage() {
                                         {result.agent_output != null &&
                                           (typeof result.agent_output === 'string' ? result.agent_output : JSON.stringify(result.agent_output)).length > 40 && '...'}
                                       </div>
-                                      {!!(result.run_metadata as Record<string, unknown> | null)?.session_id && (
-                                        <a
-                                          href={`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`}
-                                          className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
-                                          title="View agent execution session"
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            navigate(`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`);
-                                          }}
-                                        >
-                                          <ExternalLink className="h-3 w-3" />
-                                          View Session
-                                        </a>
-                                      )}
-                                    </div>
-                                  )
+                                    )}
+                                    {/* Always show session link if available, even while running */}
+                                    {!!(result.run_metadata as Record<string, unknown> | null)?.session_id && (
+                                      <a
+                                        href={`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`}
+                                        className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                                        title="View agent execution session"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          navigate(`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`);
+                                        }}
+                                      >
+                                        <ExternalLink className="h-3 w-3" />
+                                        View Session
+                                      </a>
+                                    )}
+                                  </div>
                                 ) : (
                                   <div className="flex items-center">
                                     <Minus className="h-4 w-4 text-muted-foreground" />
@@ -876,6 +882,16 @@ export function RunDetailPage() {
                                     <td key={evaluator.id} className="p-3 text-center">
                                       <div className="flex items-center justify-center">
                                         <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (result.status === 'evaluating' && !score) {
+                                  return (
+                                    <td key={evaluator.id} className="p-3 text-center">
+                                      <div className="flex items-center justify-center">
+                                        <FlaskConical className="h-4 w-4 text-purple-500 animate-pulse" />
                                       </div>
                                     </td>
                                   );
@@ -933,6 +949,10 @@ export function RunDetailPage() {
                                   <div className="flex items-center justify-center">
                                     <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
                                   </div>
+                                ) : result.status === 'evaluating' ? (
+                                  <div className="flex items-center justify-center">
+                                    <FlaskConical className="h-4 w-4 text-purple-500 animate-pulse" />
+                                  </div>
                                 ) : (
                                   <div className="flex flex-col items-center gap-1">
                                     {result.passed === true ? (
@@ -971,7 +991,11 @@ export function RunDetailPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <RefreshCw className="h-4 w-4 text-blue-500" />
-                  <span>Running</span>
+                  <span>Agent Running</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <FlaskConical className="h-4 w-4 text-purple-500" />
+                  <span>Evaluating</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Minus className="h-4 w-4 text-muted-foreground" />
@@ -983,7 +1007,7 @@ export function RunDetailPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ExternalLink className="h-4 w-4 text-blue-500" />
-                  <span>View Session (Agent or Evaluator)</span>
+                  <span>View Session</span>
                 </div>
               </div>
             </>

@@ -65,9 +65,11 @@ import {
   useCancelEvaluationRun,
   useDeleteEvaluationRun,
   useAgents,
+  useLLMProviders,
   getErrorMessage,
 } from '@/api/hooks';
 import type { EvaluationRun, EvaluationStatus } from '@/api/types';
+import { LLM_EVALUATOR_TYPES } from '@/api/types';
 
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString('en-US', {
@@ -272,6 +274,7 @@ export default function EvaluationDetailPage() {
   const [showCreateRunDialog, setShowCreateRunDialog] = useState(false);
   const [newRunAgentId, setNewRunAgentId] = useState<number | null>(null);
   const [newRunName, setNewRunName] = useState('');
+  const [newRunProviderId, setNewRunProviderId] = useState<number | null>(null);
   const [runToDelete, setRunToDelete] = useState<EvaluationRun | null>(null);
 
   // Queries
@@ -293,6 +296,14 @@ export default function EvaluationDetailPage() {
   });
 
   const { data: agentsData } = useAgents({ page: 1, pageSize: 100 });
+  const { data: providersData } = useLLMProviders({ pageSize: 100 });
+
+  // Check if evaluation has LLM-based evaluators that require a provider
+  const hasLLMEvaluators = evaluation?.evaluators?.some(
+    (evaluator) => LLM_EVALUATOR_TYPES.includes(evaluator.type)
+  ) ?? false;
+
+  const providers = providersData?.providers ?? [];
 
   // Mutations
   const createRun = useCreateEvaluationRun(evaluationId || 0);
@@ -303,6 +314,7 @@ export default function EvaluationDetailPage() {
   const handleOpenCreateRunDialog = () => {
     setNewRunAgentId(null);
     setNewRunName('');
+    setNewRunProviderId(null);
     setShowCreateRunDialog(true);
   };
 
@@ -312,11 +324,14 @@ export default function EvaluationDetailPage() {
 
   const handleCreateRun = async () => {
     if (!newRunAgentId) return;
+    // If evaluation has LLM evaluators, require a provider
+    if (hasLLMEvaluators && !newRunProviderId) return;
 
     try {
       const run = await createRun.mutateAsync({
         agent_id: newRunAgentId,
         name: newRunName.trim() || undefined,
+        llm_provider_id: newRunProviderId || undefined,
       });
       handleCloseCreateRunDialog();
       navigate(`/evaluations/${evaluationId}/runs/${run.id}`);
@@ -636,6 +651,39 @@ export default function EvaluationDetailPage() {
                 </p>
               )}
             </div>
+
+            {/* LLM Provider Selection (only shown if evaluation has LLM evaluators) */}
+            {hasLLMEvaluators && (
+              <div className="space-y-2">
+                <Label>LLM Provider *</Label>
+                <p className="text-xs text-muted-foreground">
+                  Required for LLM Judge and Semantic Similarity evaluators
+                </p>
+                <Select
+                  value={newRunProviderId?.toString() || ''}
+                  onValueChange={(v) => setNewRunProviderId(parseInt(v))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select an LLM provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providers.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id.toString()}>
+                        {provider.name} ({provider.provider_type})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {providers.length === 0 && (
+                  <p className="text-sm text-yellow-600 dark:text-yellow-500">
+                    No LLM providers configured.{' '}
+                    <Button variant="link" className="p-0 h-auto text-yellow-600 dark:text-yellow-500" onClick={() => navigate('/settings')}>
+                      Add one in Settings.
+                    </Button>
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <DialogFooter>
@@ -644,7 +692,7 @@ export default function EvaluationDetailPage() {
             </Button>
             <Button
               onClick={handleCreateRun}
-              disabled={!newRunAgentId || createRun.isPending}
+              disabled={!newRunAgentId || (hasLLMEvaluators && !newRunProviderId) || createRun.isPending}
             >
               {createRun.isPending ? (
                 <>

@@ -281,6 +281,7 @@ class EvaluationRunCreate(BaseModel):
     agent_id: int
     agent_version_id: Optional[int] = None
     name: Optional[str] = Field(None, max_length=255)  # Optional run-specific name
+    llm_provider_id: Optional[int] = None  # LLM provider for LLM-based evaluators
 
 
 class EvaluationRunResponse(BaseModel):
@@ -293,6 +294,7 @@ class EvaluationRunResponse(BaseModel):
     name: Optional[str] = None
     agent_id: int
     agent_version_id: Optional[int] = None
+    llm_provider_id: Optional[int] = None
     status: EvaluationStatus
     progress: int
     total_examples: int

@@ -219,6 +219,7 @@ def list_sessions(
     limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     status_filter: Optional[SessionStatus] = Query(None, description="Filter by session status"),
     agent_id: Optional[int] = Query(None, description="Filter by agent ID"),
+    exclude_evaluation: bool = Query(False, description="Exclude evaluation sessions"),
     current_user: User = Depends(get_current_user),
     db: DBSession = Depends(get_db)
 ):
@@ -228,6 +229,7 @@ def list_sessions(
     Supports filtering by:
     - Session status (pending, running, completed, failed)
     - Agent ID
+    - Exclude evaluation sessions (sessions with is_evaluation=true in metadata)
     """
     query = db.query(Session).filter(Session.user_id == current_user.id)
 
@@ -246,6 +248,28 @@ def list_sessions(
                 detail="Agent not found"
             )
         query = query.filter(Session.agent_id == agent_id)
+
+    if exclude_evaluation:
+        # Exclude sessions that have is_evaluation=true in their metadata
+        # Also exclude evaluator sessions (LLM Judge, Semantic Similarity) which have type='evaluator_session'
+        # Use PostgreSQL JSON extraction
+        from sqlalchemy import or_, and_, text
+        query = query.filter(
+            and_(
+                # Exclude is_evaluation=true
+                or_(
+                    Session.meta.is_(None),
+                    Session.meta.op('->>')('is_evaluation').is_(None),
+                    Session.meta.op('->>')('is_evaluation') != 'true'
+                ),
+                # Exclude type=evaluator_session
+                or_(
+                    Session.meta.is_(None),
+                    Session.meta.op('->>')('type').is_(None),
+                    Session.meta.op('->>')('type') != 'evaluator_session'
+                )
+            )
+        )
 
     total = query.count()
     sessions = query.order_by(Session.started_at.desc()).offset(skip).limit(limit).all()

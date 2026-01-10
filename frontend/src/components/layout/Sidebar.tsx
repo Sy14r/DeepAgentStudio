@@ -37,7 +37,7 @@ const managementNavItems: NavItem[] = [
 
 const activityNavItems: NavItem[] = [
   { title: 'Sessions', href: '/sessions', icon: History },
-  { title: 'Evaluations', href: '/evaluations', icon: FlaskConical },
+  { title: 'Evaluations', href: '/evaluations?tab=evaluations', icon: FlaskConical },
 ];
 
 // Settings is now handled directly in the footer section
@@ -95,7 +95,7 @@ function NavSection({ title, items, collapsed }: { title?: string; items: NavIte
 }
 
 function RecentSessions() {
-  const { data } = useSessions({ pageSize: 5 });
+  const { data } = useSessions({ pageSize: 5, excludeEvaluation: true });
   const sessions = data?.sessions || [];
 
   if (sessions.length === 0) {

@@ -937,6 +937,7 @@ export interface EvaluationRun {
   agent_id: number;
   agent_name: string | null;
   agent_version_id: number | null;
+  llm_provider_id: number | null;
   status: EvaluationStatus;
   progress: number;
   metrics: Record<string, unknown> | null;
@@ -962,7 +963,11 @@ export interface EvaluationRunCreateRequest {
   agent_id: number;
   agent_version_id?: number;
   name?: string;
+  llm_provider_id?: number;
 }
+
+// Evaluator types that require an LLM provider at run time
+export const LLM_EVALUATOR_TYPES: EvaluatorType[] = ['llm_judge', 'semantic_similarity'];
 
 export interface EvaluationRunListResponse {
   runs: EvaluationRun[];

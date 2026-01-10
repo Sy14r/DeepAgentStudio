@@ -477,7 +477,7 @@ export default function EvaluationsPage() {
     if (tabParam === 'evaluators' || tabParam === 'evaluations' || tabParam === 'datasets') {
       return tabParam;
     }
-    return 'datasets';
+    return 'evaluations';
   };
 
   const [activeTab, setActiveTab] = useState<'datasets' | 'evaluators' | 'evaluations'>(getInitialTab);
@@ -647,12 +647,12 @@ export default function EvaluationsPage() {
       <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as typeof activeTab)}>
         <div className="flex items-center justify-between mb-4">
           <TabsList>
-            <TabsTrigger value="datasets" className="gap-2">
-              <Database className="h-4 w-4" />
-              Datasets
-              {datasetsData && (
+            <TabsTrigger value="evaluations" className="gap-2">
+              <Play className="h-4 w-4" />
+              Evaluations
+              {evaluationsData && (
                 <Badge variant="secondary" className="ml-1">
-                  {datasetsData.total}
+                  {evaluationsData.total}
                 </Badge>
               )}
             </TabsTrigger>
@@ -665,12 +665,12 @@ export default function EvaluationsPage() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="evaluations" className="gap-2">
-              <Play className="h-4 w-4" />
-              Evaluations
-              {evaluationsData && (
+            <TabsTrigger value="datasets" className="gap-2">
+              <Database className="h-4 w-4" />
+              Datasets
+              {datasetsData && (
                 <Badge variant="secondary" className="ml-1">
-                  {evaluationsData.total}
+                  {datasetsData.total}
                 </Badge>
               )}
             </TabsTrigger>

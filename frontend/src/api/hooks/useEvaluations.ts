@@ -262,18 +262,16 @@ export function useImportDataset(datasetId: number) {
     }: {
       file: File;
       format: 'csv' | 'json';
-    }): Promise<{ imported_count: number }> => {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('format', format);
+    }): Promise<{ imported_count: number; skipped_count: number; errors: string[] }> => {
+      // Read file content and base64 encode it
+      const fileContent = await file.text();
+      const base64Content = btoa(unescape(encodeURIComponent(fileContent)));
 
-      const response = await apiClient.post<{ imported_count: number }>(
+      const response = await apiClient.post<{ imported_count: number; skipped_count: number; errors: string[] }>(
         `/evaluations/datasets/${datasetId}/import`,
-        formData,
         {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
+          format,
+          data: base64Content,
         }
       );
       return response.data;
@@ -765,12 +763,22 @@ export function useEvaluationRunPolling(
   runId: number | undefined,
   enabled: boolean = true
 ) {
+  const queryClient = useQueryClient();
+
   return useQuery({
     queryKey: ['evaluation-run', evaluationId, runId],
     queryFn: async (): Promise<EvaluationRunDetail> => {
       const response = await apiClient.get<EvaluationRunDetail>(
         `/evaluations/${evaluationId}/runs/${runId}`
       );
+
+      // Also invalidate results queries so the matrix view updates
+      if (evaluationId && runId) {
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-results', evaluationId, runId],
+        });
+      }
+
       return response.data;
     },
     enabled: !!evaluationId && !!runId && enabled,

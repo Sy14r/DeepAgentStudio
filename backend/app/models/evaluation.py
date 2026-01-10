@@ -199,6 +199,7 @@ class EvaluationRun(Base):
     name = Column(String(255), nullable=True)  # Optional run-specific name
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     agent_version_id = Column(Integer, ForeignKey("agent_versions.id", ondelete="SET NULL"), nullable=True)
+    llm_provider_id = Column(Integer, ForeignKey("llm_provider_configs.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(String(20), nullable=False, default=EvaluationStatus.PENDING.value, index=True)
     progress = Column(Integer, nullable=False, default=0)
     total_examples = Column(Integer, nullable=False, default=0)
@@ -213,6 +214,7 @@ class EvaluationRun(Base):
     evaluation = relationship("Evaluation", back_populates="runs")
     agent = relationship("Agent", back_populates="evaluation_runs")
     agent_version = relationship("AgentVersion")
+    llm_provider = relationship("LLMProviderConfig")
     results = relationship(
         "EvaluationResult",
         back_populates="run",
