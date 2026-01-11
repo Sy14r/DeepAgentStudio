@@ -875,26 +875,71 @@ export interface EvaluatorTestResult {
   details: Record<string, unknown> | null;
 }
 
-// Evaluation Run Types
-export interface EvaluationRunConfig {
+// Evaluation Config (reusable configuration)
+export interface EvaluationConfig {
+  concurrency?: number;
+  timeout_per_example_ms?: number;
+  retry_failed?: boolean;
+  max_retries?: number;
   sample_size?: number;
   sample_seed?: number;
-  max_concurrency?: number;
-  timeout_seconds?: number;
-  retry_count?: number;
 }
 
-export interface EvaluationRun {
+export interface Evaluation {
   id: number;
   user_id: number;
   name: string;
+  description: string | null;
   dataset_id: number;
-  dataset_name: string;
-  agent_id: number | null;
+  config: EvaluationConfig;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string | null;
+  // Computed/nested fields
+  dataset_name: string | null;
+  evaluator_count: number;
+  run_count: number;
+}
+
+export interface EvaluationDetail extends Evaluation {
+  evaluators: Evaluator[];
+  dataset: EvaluationDataset | null;
+}
+
+export interface EvaluationCreateRequest {
+  name: string;
+  description?: string;
+  dataset_id: number;
+  evaluator_ids: number[];
+  config?: EvaluationConfig;
+}
+
+export interface EvaluationUpdateRequest {
+  name?: string;
+  description?: string;
+  evaluator_ids?: number[];
+  config?: EvaluationConfig;
+}
+
+export interface EvaluationListResponse {
+  evaluations: Evaluation[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// Evaluation Run Types (execution instance within an Evaluation)
+export interface EvaluationRun {
+  id: number;
+  user_id: number;
+  evaluation_id: number;
+  name: string | null;
+  agent_id: number;
   agent_name: string | null;
   agent_version_id: number | null;
+  llm_provider_id: number | null;
   status: EvaluationStatus;
-  config: EvaluationRunConfig | null;
+  progress: number;
   metrics: Record<string, unknown> | null;
   total_examples: number;
   completed_examples: number;
@@ -904,21 +949,25 @@ export interface EvaluationRun {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
-  updated_at: string | null;
+  // Computed/nested fields
+  evaluation_name: string | null;
+  dataset_name: string | null;
 }
 
 export interface EvaluationRunDetail extends EvaluationRun {
+  evaluation: Evaluation | null;
   evaluators: Evaluator[];
 }
 
 export interface EvaluationRunCreateRequest {
-  name: string;
-  dataset_id: number;
-  agent_id?: number;
+  agent_id: number;
   agent_version_id?: number;
-  evaluator_ids: number[];
-  config?: EvaluationRunConfig;
+  name?: string;
+  llm_provider_id?: number;
 }
+
+// Evaluator types that require an LLM provider at run time
+export const LLM_EVALUATOR_TYPES: EvaluatorType[] = ['llm_judge', 'semantic_similarity'];
 
 export interface EvaluationRunListResponse {
   runs: EvaluationRun[];

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta
+import logging
 
 from ...database import get_db
 from ...security import hash_password, verify_password, create_access_token
@@ -9,6 +10,9 @@ from ...models.user import User
 from ...schemas.user import UserCreate, UserResponse, Token
 from ...config import settings
 from ...api.deps import get_current_active_user
+from ...utils.power_agent import seed_builtin_agents
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -56,6 +60,12 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+
+    # Seed built-in agents if they don't exist yet (needs at least one user)
+    try:
+        seed_builtin_agents(db)
+    except Exception as e:
+        logger.warning(f"Failed to seed built-in agents after user registration: {e}")
 
     return db_user
 

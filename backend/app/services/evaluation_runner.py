@@ -8,6 +8,7 @@ from typing import Optional, Callable, Any
 from sqlalchemy.orm import Session, joinedload, subqueryload
 
 from ..models.evaluation import (
+    Evaluation,
     EvaluationRun,
     EvaluationResult,
     EvaluationScore,
@@ -17,9 +18,10 @@ from ..models.evaluation import (
     EvaluationStatus,
     EvaluationScoreStatus,
 )
+from ..database import SessionLocal
 from ..schemas.evaluation import (
     EvaluationRunCreate,
-    EvaluationRunConfig,
+    EvaluationConfig,
     EvaluationProgressEvent,
     EvaluationResultEvent,
     EvaluationCompleteEvent,
@@ -60,39 +62,39 @@ class EvaluationRunner:
         self.dataset_service = DatasetService(db)
         self.evaluator_service = EvaluatorService(db)
 
-    def create_run(self, user_id: int, data: EvaluationRunCreate) -> EvaluationRun:
-        """Create a new evaluation run"""
-        # Verify dataset exists and belongs to user
-        dataset = self.dataset_service.get_dataset(data.dataset_id, user_id)
-        if not dataset:
-            raise ValueError(f"Dataset {data.dataset_id} not found")
+    def create_run(self, user_id: int, evaluation_id: int, data: EvaluationRunCreate) -> EvaluationRun:
+        """Create a new evaluation run within an evaluation"""
+        # Get evaluation with dataset info
+        evaluation = self.db.query(Evaluation).options(
+            joinedload(Evaluation.dataset),
+            joinedload(Evaluation.evaluators)
+        ).filter(
+            Evaluation.id == evaluation_id,
+            Evaluation.user_id == user_id
+        ).first()
 
-        # Verify evaluators exist and are accessible
-        evaluators = self.evaluator_service.get_evaluators_by_ids(data.evaluator_ids, user_id)
-        if len(evaluators) != len(data.evaluator_ids):
-            raise ValueError("One or more evaluators not found")
+        if not evaluation:
+            raise ValueError(f"Evaluation {evaluation_id} not found")
+
+        if not evaluation.dataset:
+            raise ValueError(f"Dataset for evaluation {evaluation_id} not found")
 
         # Create the run
         run = EvaluationRun(
             user_id=user_id,
+            evaluation_id=evaluation.id,
             name=data.name,
-            dataset_id=data.dataset_id,
             agent_id=data.agent_id,
             agent_version_id=data.agent_version_id,
+            llm_provider_id=data.llm_provider_id,
             status=EvaluationStatus.PENDING.value,
             progress=0,
-            total_examples=dataset.example_count,
+            total_examples=evaluation.dataset.example_count,
             completed_examples=0,
-            config=data.config.model_dump() if data.config else {},
         )
         self.db.add(run)
         self.db.commit()
         self.db.refresh(run)
-
-        # Associate evaluators
-        for evaluator in evaluators:
-            run.evaluators.append(evaluator)
-        self.db.commit()
 
         return run
 
@@ -104,11 +106,11 @@ class EvaluationRunner:
         ).first()
 
     def get_run_with_details(self, run_id: int, user_id: int) -> Optional[EvaluationRun]:
-        """Get an evaluation run with evaluators and results loaded"""
+        """Get an evaluation run with evaluation, evaluators, and results loaded"""
         return self.db.query(EvaluationRun).options(
-            joinedload(EvaluationRun.evaluators),
+            joinedload(EvaluationRun.evaluation).joinedload(Evaluation.evaluators),
+            joinedload(EvaluationRun.evaluation).joinedload(Evaluation.dataset),
             joinedload(EvaluationRun.results).joinedload(EvaluationResult.scores),
-            joinedload(EvaluationRun.dataset),
             joinedload(EvaluationRun.agent),
         ).filter(
             EvaluationRun.id == run_id,
@@ -121,7 +123,7 @@ class EvaluationRunner:
         page: int = 1,
         page_size: int = 20,
         status: Optional[str] = None,
-        dataset_id: Optional[int] = None,
+        evaluation_id: Optional[int] = None,
         agent_id: Optional[int] = None,
     ) -> tuple[list[EvaluationRun], int]:
         """List evaluation runs with pagination"""
@@ -131,14 +133,17 @@ class EvaluationRunner:
 
         if status:
             query = query.filter(EvaluationRun.status == status)
-        if dataset_id:
-            query = query.filter(EvaluationRun.dataset_id == dataset_id)
+        if evaluation_id:
+            query = query.filter(EvaluationRun.evaluation_id == evaluation_id)
         if agent_id:
             query = query.filter(EvaluationRun.agent_id == agent_id)
 
         total = query.count()
 
-        runs = query.order_by(EvaluationRun.created_at.desc()).offset(
+        runs = query.options(
+            joinedload(EvaluationRun.evaluation),
+            joinedload(EvaluationRun.agent),
+        ).order_by(EvaluationRun.created_at.desc()).offset(
             (page - 1) * page_size
         ).limit(page_size).all()
 
@@ -163,15 +168,19 @@ class EvaluationRunner:
         self._emit_progress(run)
 
         try:
-            # Get dataset examples
-            dataset = self.dataset_service.get_dataset_with_examples(run.dataset_id, user_id)
+            # Get dataset examples from evaluation
+            if not run.evaluation or not run.evaluation.dataset:
+                raise ValueError("Evaluation or dataset not found")
+
+            dataset = self.dataset_service.get_dataset_with_examples(run.evaluation.dataset_id, user_id)
             if not dataset:
                 raise ValueError("Dataset not found")
 
             examples = list(dataset.examples)
 
-            # Apply sampling if configured
-            config = EvaluationRunConfig(**run.config) if run.config else EvaluationRunConfig()
+            # Apply sampling if configured (config comes from evaluation)
+            eval_config = run.evaluation.config or {}
+            config = EvaluationConfig(**eval_config) if eval_config else EvaluationConfig()
             if config.sample_size and config.sample_size < len(examples):
                 import random
                 if config.sample_seed:
@@ -233,77 +242,133 @@ class EvaluationRunner:
         self,
         run: EvaluationRun,
         example: DatasetExample,
-        config: EvaluationRunConfig
+        config: EvaluationConfig
     ):
         """Execute evaluation for a single example"""
-        # Get the result record
-        result = self.db.query(EvaluationResult).filter(
-            EvaluationResult.run_id == run.id,
-            EvaluationResult.example_id == example.id
-        ).first()
-
-        if not result:
-            return
-
-        result.status = EvaluationStatus.RUNNING.value
-        self.db.commit()
-
-        start_time = datetime.utcnow()
+        # Create a new database session for this concurrent task
+        # This avoids SQLAlchemy session conflicts when multiple tasks run concurrently
+        task_db = SessionLocal()
 
         try:
-            # Execute agent using AgentExecutorService
-            agent_output, run_metadata = await self._run_agent(
-                agent_id=run.agent_id,
-                input_data=example.input,
-                timeout_ms=config.timeout_per_example_ms,
-                user_id=run.user_id,
-                run_id=run.id,
-                run_name=run.name,
-                example_name=example.name
-            )
+            # Re-query objects in this session to avoid cross-session issues
+            task_run = task_db.query(EvaluationRun).options(
+                joinedload(EvaluationRun.evaluation).joinedload(Evaluation.evaluators)
+            ).filter(EvaluationRun.id == run.id).first()
 
-            # Record result data
-            result.agent_output = agent_output
-            result.run_metadata = run_metadata
-            result.latency_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-            result.token_usage_input = run_metadata.get("token_usage", {}).get("input", 0) if run_metadata else 0
-            result.token_usage_output = run_metadata.get("token_usage", {}).get("output", 0) if run_metadata else 0
-            result.cost = Decimal(str(run_metadata.get("cost", 0) or 0)) if run_metadata else None
+            task_example = task_db.query(DatasetExample).filter(
+                DatasetExample.id == example.id
+            ).first()
 
-            # Run evaluators
-            evaluator_input = EvaluatorInput(
-                input=example.input,
-                expected_output=example.expected_output,
-                actual_output=agent_output,
-                run_metadata=run_metadata,
-                context=example.context
-            )
+            if not task_run or not task_example:
+                logger.error(f"Could not find run {run.id} or example {example.id} in task session")
+                return
 
-            for evaluator in run.evaluators:
-                await self._run_evaluator(result, evaluator, evaluator_input, run)
+            # Get the result record
+            result = task_db.query(EvaluationResult).filter(
+                EvaluationResult.run_id == task_run.id,
+                EvaluationResult.example_id == task_example.id
+            ).first()
 
-            result.status = EvaluationStatus.COMPLETED.value
-            result.completed_at = datetime.utcnow()
+            if not result:
+                logger.error(f"Could not find result for run {task_run.id}, example {task_example.id}")
+                return
 
-        except asyncio.TimeoutError:
-            result.status = EvaluationStatus.ERROR.value
-            result.error_message = f"Timeout after {config.timeout_per_example_ms}ms"
-            result.completed_at = datetime.utcnow()
+            result.status = EvaluationStatus.RUNNING.value
+            task_db.commit()
 
-        except Exception as e:
-            logger.exception(f"Example {example.id} evaluation failed: {e}")
-            result.status = EvaluationStatus.ERROR.value
-            result.error_message = str(e)
-            result.completed_at = datetime.utcnow()
+            start_time = datetime.utcnow()
+
+            try:
+                # Execute agent using AgentExecutorService
+                agent_output, run_metadata = await self._run_agent(
+                    agent_id=task_run.agent_id,
+                    input_data=task_example.input,
+                    timeout_ms=config.timeout_per_example_ms,
+                    user_id=task_run.user_id,
+                    run_id=task_run.id,
+                    run_name=task_run.name,
+                    example_name=task_example.name
+                )
+
+                # Record result data
+                result.agent_output = agent_output
+                result.run_metadata = run_metadata
+                result.latency_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                result.token_usage_input = run_metadata.get("token_usage", {}).get("input", 0) if run_metadata else 0
+                result.token_usage_output = run_metadata.get("token_usage", {}).get("output", 0) if run_metadata else 0
+                result.cost = Decimal(str(run_metadata.get("cost", 0) or 0)) if run_metadata else None
+
+                # Commit after agent execution so session_id is available for debugging
+                # even while evaluators are still running
+                # Also mark as EVALUATING to show agent is done, evaluators running
+                result.status = EvaluationStatus.EVALUATING.value
+                task_db.commit()
+
+                # Run evaluators
+                evaluator_input = EvaluatorInput(
+                    input=task_example.input,
+                    expected_output=task_example.expected_output,
+                    actual_output=agent_output,
+                    run_metadata=run_metadata,
+                    context=task_example.context
+                )
+
+                # Run evaluators from evaluation config
+                for evaluator in task_run.evaluation.evaluators:
+                    await self._run_evaluator_with_session(task_db, result, evaluator, evaluator_input, task_run)
+
+                result.status = EvaluationStatus.COMPLETED.value
+                result.completed_at = datetime.utcnow()
+
+            except asyncio.TimeoutError:
+                result.status = EvaluationStatus.ERROR.value
+                result.error_message = f"Timeout after {config.timeout_per_example_ms}ms"
+                result.completed_at = datetime.utcnow()
+
+            except Exception as e:
+                logger.exception(f"Example {example.id} evaluation failed: {e}")
+                result.status = EvaluationStatus.ERROR.value
+                result.error_message = str(e)
+                result.completed_at = datetime.utcnow()
+
+            finally:
+                # Update progress - need to use main session for run updates
+                # Use a fresh query to get current values and avoid conflicts
+                task_db.commit()
+
+                # Update progress in main session with proper locking
+                await self._update_run_progress(run.id)
+
+                self._emit_progress(run)
+                self._emit_result(run, result)
 
         finally:
-            # Update progress
-            run.completed_examples += 1
-            run.progress = int((run.completed_examples / run.total_examples) * 100)
-            self.db.commit()
+            task_db.close()
 
-            self._emit_progress(run)
-            self._emit_result(run, result)
+    async def _update_run_progress(self, run_id: int):
+        """Update run progress using a dedicated session to avoid conflicts"""
+        progress_db = SessionLocal()
+        try:
+            # Get current completed count
+            completed = progress_db.query(EvaluationResult).filter(
+                EvaluationResult.run_id == run_id,
+                EvaluationResult.status.in_([
+                    EvaluationStatus.COMPLETED.value,
+                    EvaluationStatus.ERROR.value,
+                    EvaluationStatus.FAILED.value
+                ])
+            ).count()
+
+            run = progress_db.query(EvaluationRun).filter(
+                EvaluationRun.id == run_id
+            ).first()
+
+            if run:
+                run.completed_examples = completed
+                run.progress = int((completed / run.total_examples) * 100) if run.total_examples > 0 else 0
+                progress_db.commit()
+        finally:
+            progress_db.close()
 
     async def _run_agent(
         self,
@@ -326,28 +391,31 @@ class EvaluationRunner:
         else:
             input_message = str(input_data)
 
-        # Create agent executor service and invoke the agent
-        agent_service = AgentExecutorService(self.db, user_id)
-
-        # Build evaluation-specific session title
-        title_parts = ["Eval"]
-        if run_name:
-            title_parts.append(run_name)
-        else:
-            title_parts.append(f"Run #{run_id}")
-        if example_name:
-            title_parts.append(example_name)
-        session_title = " - ".join(title_parts)
-
-        # Mark session as evaluation session to prevent dynamic title renaming
-        session_metadata = {
-            "is_evaluation": True,
-            "evaluation_run_id": run_id,
-            "evaluation_run_name": run_name,
-            "example_name": example_name
-        }
-
+        # Create a separate database session for the agent executor
+        # This is critical to avoid concurrent access issues when running multiple evaluations in parallel
+        agent_db = SessionLocal()
         try:
+            # Create agent executor service with its own session
+            agent_service = AgentExecutorService(agent_db, user_id)
+
+            # Build evaluation-specific session title
+            title_parts = ["Eval"]
+            if run_name:
+                title_parts.append(run_name)
+            else:
+                title_parts.append(f"Run #{run_id}")
+            if example_name:
+                title_parts.append(example_name)
+            session_title = " - ".join(title_parts)
+
+            # Mark session as evaluation session to prevent dynamic title renaming
+            session_metadata = {
+                "is_evaluation": True,
+                "evaluation_run_id": run_id,
+                "evaluation_run_name": run_name,
+                "example_name": example_name
+            }
+
             result = await asyncio.wait_for(
                 agent_service.invoke_async(
                     agent_id=agent_id,
@@ -368,6 +436,7 @@ class EvaluationRunner:
                     "input": result.tokens_input,
                     "output": result.tokens_output
                 },
+                "cost": result.cost,  # Cost in USD from model pricing
                 "latency_ms": result.total_latency_ms,
                 "chain_length": len(result.steps) if result.steps else 0,
                 "tool_calls": [
@@ -402,6 +471,8 @@ class EvaluationRunner:
                 "error": str(e),
                 "error_type": type(e).__name__
             }
+        finally:
+            agent_db.close()
 
     async def _run_evaluator(
         self,
@@ -450,7 +521,8 @@ class EvaluationRunner:
                     eval_instance=eval_instance,
                     evaluator_input=evaluator_input,
                     evaluator=evaluator,
-                    session=evaluator_session
+                    session=evaluator_session,
+                    run=run
                 )
             else:
                 eval_result: EvaluatorResult = eval_instance.evaluate(evaluator_input)
@@ -485,6 +557,120 @@ class EvaluationRunner:
 
             self.db.commit()
 
+    async def _run_evaluator_with_session(
+        self,
+        db: Session,
+        result: EvaluationResult,
+        evaluator: Evaluator,
+        evaluator_input: EvaluatorInput,
+        run: EvaluationRun
+    ):
+        """Run a single evaluator and record score - uses provided db session"""
+        # Create score record with PENDING status first
+        score = EvaluationScore(
+            result_id=result.id,
+            evaluator_id=evaluator.id,
+            status=EvaluationScoreStatus.PENDING.value,
+            score=None,
+            passed=None,
+            feedback="Evaluation pending",
+        )
+        db.add(score)
+        db.commit()
+        db.refresh(score)
+
+        evaluator_session = None
+
+        try:
+            # Mark as running
+            score.status = EvaluationScoreStatus.RUNNING.value
+            db.commit()
+
+            # For LLM-based evaluators, create a session to track the LLM call
+            if evaluator.type in LLM_EVALUATOR_TYPES:
+                evaluator_session = self._create_evaluator_session_with_db(
+                    db=db,
+                    evaluator=evaluator,
+                    run=run,
+                    result=result
+                )
+                score.session_id = evaluator_session.id
+                db.commit()
+
+            # Get the evaluator instance with session context for LLM evaluators
+            eval_instance = get_evaluator(evaluator.type, evaluator.config or {})
+
+            # For LLM evaluators, pass session context to enable actual LLM calls
+            if evaluator.type in LLM_EVALUATOR_TYPES and evaluator_session:
+                eval_result = await self._run_llm_evaluator_with_db(
+                    db=db,
+                    eval_instance=eval_instance,
+                    evaluator_input=evaluator_input,
+                    evaluator=evaluator,
+                    session=evaluator_session,
+                    run=run
+                )
+            else:
+                eval_result: EvaluatorResult = eval_instance.evaluate(evaluator_input)
+
+            # Update score with results
+            score.score = eval_result.score
+            score.passed = eval_result.passed
+            score.feedback = eval_result.feedback
+            score.score_metadata = eval_result.metadata
+            score.status = EvaluationScoreStatus.COMPLETED.value
+
+            # Update session status if we created one
+            if evaluator_session:
+                evaluator_session.status = SessionStatus.COMPLETED
+                evaluator_session.completed_at = datetime.utcnow()
+
+            db.commit()
+
+        except Exception as e:
+            logger.exception(f"Evaluator {evaluator.id} failed: {e}")
+            score.score = None
+            score.passed = None
+            score.feedback = f"Evaluator error: {str(e)}"
+            score.score_metadata = {"error": str(e)}
+            score.status = EvaluationScoreStatus.FAILED.value
+
+            # Update session status on error
+            if evaluator_session:
+                evaluator_session.status = SessionStatus.FAILED
+                evaluator_session.error_message = str(e)
+                evaluator_session.completed_at = datetime.utcnow()
+
+            db.commit()
+
+    def _create_evaluator_session_with_db(
+        self,
+        db: Session,
+        evaluator: Evaluator,
+        run: EvaluationRun,
+        result: EvaluationResult
+    ) -> Session:
+        """Create a session to track LLM evaluator execution - uses provided db session"""
+        session = Session(
+            user_id=run.user_id,
+            title=f"Evaluator: {evaluator.name}",
+            status=SessionStatus.RUNNING,
+            meta={
+                "type": "evaluator_session",
+                "evaluator_id": evaluator.id,
+                "evaluator_name": evaluator.name,
+                "evaluator_type": evaluator.type,
+                "evaluation_run_id": run.id,
+                "evaluation_run_name": run.name,
+                "result_id": result.id,
+                "example_id": result.example_id
+            }
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        return session
+
     async def _create_evaluator_session(
         self,
         evaluator: Evaluator,
@@ -517,7 +703,8 @@ class EvaluationRunner:
         eval_instance,
         evaluator_input: EvaluatorInput,
         evaluator: Evaluator,
-        session: Session
+        session: Session,
+        run: EvaluationRun
     ) -> EvaluatorResult:
         """Run an LLM-based evaluator with session tracking"""
         from .llm_adapter import LLMProviderAdapter
@@ -526,8 +713,9 @@ class EvaluationRunner:
         start_time = datetime.utcnow()
         config = evaluator.config or {}
 
-        # Get LLM configuration from evaluator config
-        provider_id = config.get("provider_id")
+        # Get LLM configuration - prioritize run-level provider over evaluator config
+        # This allows users to specify provider at run time for built-in evaluators
+        provider_id = run.llm_provider_id or config.get("provider_id")
         model = config.get("model", "gpt-4o-mini")
         criteria = config.get("criteria", "correctness")
 
@@ -617,6 +805,118 @@ class EvaluationRunner:
             )
             self.db.add(error_message)
             self.db.commit()
+
+            # Fall back to basic evaluation
+            return eval_instance.evaluate(evaluator_input)
+
+    async def _run_llm_evaluator_with_db(
+        self,
+        db: Session,
+        eval_instance,
+        evaluator_input: EvaluatorInput,
+        evaluator: Evaluator,
+        session: Session,
+        run: EvaluationRun
+    ) -> EvaluatorResult:
+        """Run an LLM-based evaluator with session tracking - uses provided db session"""
+        from .llm_adapter import LLMProviderAdapter
+        from ..models.llm_provider import LLMProviderConfig
+
+        start_time = datetime.utcnow()
+        config = evaluator.config or {}
+
+        # Get LLM configuration - prioritize run-level provider over evaluator config
+        # This allows users to specify provider at run time for built-in evaluators
+        provider_id = run.llm_provider_id or config.get("provider_id")
+        model = config.get("model", "gpt-4o-mini")
+        criteria = config.get("criteria", "correctness")
+
+        # Build the evaluation prompt
+        system_prompt = self._build_llm_judge_system_prompt(criteria, config)
+        user_prompt = self._build_llm_judge_user_prompt(evaluator_input, criteria)
+
+        # Record the user message in the session
+        user_message = Message(
+            session_id=session.id,
+            role=MessageRole.USER,
+            content=user_prompt,
+            sequence_number=0,
+            meta={"type": "evaluation_request"}
+        )
+        db.add(user_message)
+        db.commit()
+
+        try:
+            # If no provider_id, use fallback evaluation
+            if not provider_id:
+                logger.warning(f"No provider_id configured for LLM evaluator {evaluator.id}, using fallback")
+                return eval_instance.evaluate(evaluator_input)
+
+            # Get the LLM provider
+            provider_config = db.query(LLMProviderConfig).filter(
+                LLMProviderConfig.id == provider_id,
+                LLMProviderConfig.is_active == True
+            ).first()
+
+            if not provider_config:
+                logger.warning(f"Provider {provider_id} not found, using fallback evaluation")
+                return eval_instance.evaluate(evaluator_input)
+
+            # Create LLM instance
+            llm = LLMProviderAdapter.create_llm(provider_config, {
+                "model": model,
+                "temperature": config.get("temperature", 0.0),
+                "max_tokens": config.get("max_tokens", 1024)
+            })
+
+            # Make the LLM call
+            from langchain_core.messages import SystemMessage, HumanMessage
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+
+            response = await llm.ainvoke(messages)
+
+            # Parse the response
+            response_text = response.content
+            eval_result = self._parse_llm_judge_response(response_text, criteria)
+
+            # Record assistant message
+            assistant_message = Message(
+                session_id=session.id,
+                role=MessageRole.ASSISTANT,
+                content=response_text,
+                sequence_number=1,
+                meta={"type": "evaluation_response"}
+            )
+            db.add(assistant_message)
+
+            # Update session with token usage
+            latency_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            session.total_latency_ms = latency_ms
+
+            # Try to get token usage from response
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                session.token_usage_input = response.usage_metadata.get('input_tokens', 0)
+                session.token_usage_output = response.usage_metadata.get('output_tokens', 0)
+
+            db.commit()
+
+            return eval_result
+
+        except Exception as e:
+            logger.exception(f"LLM evaluator call failed: {e}")
+            # Record error in session
+            error_message = Message(
+                session_id=session.id,
+                role=MessageRole.ASSISTANT,
+                content=f"Error: {str(e)}",
+                sequence_number=1,
+                meta={"type": "error", "error": str(e)}
+            )
+            db.add(error_message)
+            db.commit()
 
             # Fall back to basic evaluation
             return eval_instance.evaluate(evaluator_input)
@@ -761,7 +1061,7 @@ Evaluate based on {criteria} criteria and provide your assessment in JSON format
         timeout_seconds: int = 300,
         poll_interval: float = 1.0
     ) -> None:
-        """Wait for all evaluation scores to reach terminal status"""
+        """Wait for all evaluation results and scores to reach terminal status"""
         start_time = datetime.utcnow()
 
         while True:
@@ -770,8 +1070,20 @@ Evaluate based on {criteria} criteria and provide your assessment in JSON format
             if elapsed > timeout_seconds:
                 # Mark remaining pending/running scores as failed
                 self._fail_pending_scores(run.id, "Evaluation timeout")
+                # Also mark remaining pending/running/evaluating results as errored
+                self._fail_pending_results(run.id, "Evaluation timeout")
                 logger.warning(f"Evaluation run {run.id} timed out waiting for scores")
                 break
+
+            # Query pending/running/evaluating results
+            pending_results = self.db.query(EvaluationResult).filter(
+                EvaluationResult.run_id == run.id,
+                EvaluationResult.status.in_([
+                    EvaluationStatus.PENDING.value,
+                    EvaluationStatus.RUNNING.value,
+                    EvaluationStatus.EVALUATING.value
+                ])
+            ).count()
 
             # Query pending/running scores
             pending_scores = self.db.query(EvaluationScore).join(
@@ -784,7 +1096,7 @@ Evaluate based on {criteria} criteria and provide your assessment in JSON format
                 ])
             ).count()
 
-            if pending_scores == 0:
+            if pending_results == 0 and pending_scores == 0:
                 break
 
             await asyncio.sleep(poll_interval)
@@ -805,6 +1117,24 @@ Evaluate based on {criteria} criteria and provide your assessment in JSON format
             score.status = EvaluationScoreStatus.FAILED.value
             score.feedback = error_message
             score.score_metadata = {"error": error_message, "timeout": True}
+
+        self.db.commit()
+
+    def _fail_pending_results(self, run_id: int, error_message: str) -> None:
+        """Mark all pending/running/evaluating results as errored"""
+        pending_results = self.db.query(EvaluationResult).filter(
+            EvaluationResult.run_id == run_id,
+            EvaluationResult.status.in_([
+                EvaluationStatus.PENDING.value,
+                EvaluationStatus.RUNNING.value,
+                EvaluationStatus.EVALUATING.value
+            ])
+        ).all()
+
+        for result in pending_results:
+            result.status = EvaluationStatus.ERROR.value
+            result.error_message = error_message
+            result.completed_at = datetime.utcnow()
 
         self.db.commit()
 
@@ -839,9 +1169,9 @@ Evaluate based on {criteria} criteria and provide your assessment in JSON format
         scored_values = [float(s.score) for s in all_scores if s.score is not None]
         avg_score = sum(scored_values) / len(scored_values) if scored_values else 0
 
-        # Calculate per-evaluator metrics
+        # Calculate per-evaluator metrics (evaluators from evaluation config)
         evaluator_scores = {}
-        for evaluator in run.evaluators:
+        for evaluator in run.evaluation.evaluators:
             evaluator_results = [s for s in all_scores if s.evaluator_id == evaluator.id]
             if evaluator_results:
                 eval_passed = sum(1 for s in evaluator_results if s.passed is True)

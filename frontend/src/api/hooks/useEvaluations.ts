@@ -17,6 +17,11 @@ import type {
   EvaluatorTestResult,
   EvaluatorCategory,
   EvaluatorType,
+  Evaluation,
+  EvaluationDetail,
+  EvaluationCreateRequest,
+  EvaluationUpdateRequest,
+  EvaluationListResponse,
   EvaluationRun,
   EvaluationRunDetail,
   EvaluationRunCreateRequest,
@@ -257,18 +262,16 @@ export function useImportDataset(datasetId: number) {
     }: {
       file: File;
       format: 'csv' | 'json';
-    }): Promise<{ imported_count: number }> => {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('format', format);
+    }): Promise<{ imported_count: number; skipped_count: number; errors: string[] }> => {
+      // Read file content and base64 encode it
+      const fileContent = await file.text();
+      const base64Content = btoa(unescape(encodeURIComponent(fileContent)));
 
-      const response = await apiClient.post<{ imported_count: number }>(
+      const response = await apiClient.post<{ imported_count: number; skipped_count: number; errors: string[] }>(
         `/evaluations/datasets/${datasetId}/import`,
-        formData,
         {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
+          format,
+          data: base64Content,
         }
       );
       return response.data;
@@ -432,27 +435,154 @@ export function useSeedBuiltinEvaluators() {
 }
 
 // ============================================================================
-// Evaluation Run Hooks
+// Evaluation Hooks (Reusable Config)
+// ============================================================================
+
+interface UseEvaluationsParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  datasetId?: number;
+  isActive?: boolean;
+}
+
+export function useEvaluations(params: UseEvaluationsParams = {}) {
+  const { page = 1, pageSize = 50, search, datasetId, isActive } = params;
+
+  return useQuery({
+    queryKey: ['evaluations', { page, pageSize, search, datasetId, isActive }],
+    queryFn: async (): Promise<EvaluationListResponse> => {
+      const searchParams = new URLSearchParams();
+      searchParams.append('page', page.toString());
+      searchParams.append('page_size', pageSize.toString());
+      if (search) searchParams.append('search', search);
+      if (datasetId) searchParams.append('dataset_id', datasetId.toString());
+      if (isActive !== undefined) searchParams.append('is_active', isActive.toString());
+
+      const response = await apiClient.get<EvaluationListResponse>(
+        `/evaluations?${searchParams.toString()}`
+      );
+      return response.data;
+    },
+  });
+}
+
+export function useEvaluation(id: number | undefined) {
+  return useQuery({
+    queryKey: ['evaluation', id],
+    queryFn: async (): Promise<EvaluationDetail> => {
+      const response = await apiClient.get<EvaluationDetail>(`/evaluations/${id}`);
+      return response.data;
+    },
+    enabled: !!id,
+  });
+}
+
+export function useCreateEvaluation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: EvaluationCreateRequest): Promise<Evaluation> => {
+      const response = await apiClient.post<Evaluation>('/evaluations', data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['evaluations'] });
+    },
+  });
+}
+
+export function useUpdateEvaluation(id: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: EvaluationUpdateRequest): Promise<Evaluation> => {
+      const response = await apiClient.put<Evaluation>(`/evaluations/${id}`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['evaluations'] });
+      queryClient.invalidateQueries({ queryKey: ['evaluation', id] });
+    },
+  });
+}
+
+export function useDeleteEvaluation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: number): Promise<void> => {
+      await apiClient.delete(`/evaluations/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['evaluations'] });
+    },
+  });
+}
+
+// ============================================================================
+// Evaluation Run Hooks (Execution Instances)
 // ============================================================================
 
 interface UseEvaluationRunsParams {
+  evaluationId: number;
   page?: number;
   pageSize?: number;
-  datasetId?: number;
-  agentId?: number;
   status?: EvaluationStatus;
+  /** Enable polling when any run is active (running/evaluating/pending) */
+  pollingEnabled?: boolean;
 }
 
-export function useEvaluationRuns(params: UseEvaluationRunsParams = {}) {
-  const { page = 1, pageSize = 50, datasetId, agentId, status } = params;
+export function useEvaluationRuns(params: UseEvaluationRunsParams) {
+  const { evaluationId, page = 1, pageSize = 50, status, pollingEnabled = false } = params;
 
   return useQuery({
-    queryKey: ['evaluation-runs', { page, pageSize, datasetId, agentId, status }],
+    queryKey: ['evaluation-runs', evaluationId, { page, pageSize, status }],
     queryFn: async (): Promise<EvaluationRunListResponse> => {
       const searchParams = new URLSearchParams();
       searchParams.append('page', page.toString());
       searchParams.append('page_size', pageSize.toString());
-      if (datasetId) searchParams.append('dataset_id', datasetId.toString());
+      if (status) searchParams.append('status', status);
+
+      const response = await apiClient.get<EvaluationRunListResponse>(
+        `/evaluations/${evaluationId}/runs?${searchParams.toString()}`
+      );
+      return response.data;
+    },
+    enabled: !!evaluationId,
+    // Poll every 3 seconds when polling is enabled AND any run is active
+    refetchInterval: (query) => {
+      if (!pollingEnabled) return false;
+      const data = query.state.data;
+      if (!data) return false;
+      // Check if any run is in an active state
+      const hasActiveRun = data.runs.some(
+        (r) => r.status === 'running' || r.status === 'evaluating' || r.status === 'pending'
+      );
+      return hasActiveRun ? 3000 : false;
+    },
+    // Keep previous data during refetch to prevent UI flicker
+    placeholderData: (previousData) => previousData,
+  });
+}
+
+// Get all runs across all evaluations (for global runs list)
+interface UseAllEvaluationRunsParams {
+  page?: number;
+  pageSize?: number;
+  agentId?: number;
+  status?: EvaluationStatus;
+}
+
+export function useAllEvaluationRuns(params: UseAllEvaluationRunsParams = {}) {
+  const { page = 1, pageSize = 50, agentId, status } = params;
+
+  return useQuery({
+    queryKey: ['all-evaluation-runs', { page, pageSize, agentId, status }],
+    queryFn: async (): Promise<EvaluationRunListResponse> => {
+      const searchParams = new URLSearchParams();
+      searchParams.append('page', page.toString());
+      searchParams.append('page_size', pageSize.toString());
       if (agentId) searchParams.append('agent_id', agentId.toString());
       if (status) searchParams.append('status', status);
 
@@ -464,78 +594,94 @@ export function useEvaluationRuns(params: UseEvaluationRunsParams = {}) {
   });
 }
 
-export function useEvaluationRun(id: number | undefined) {
+export function useEvaluationRun(evaluationId: number | undefined, runId: number | undefined) {
   return useQuery({
-    queryKey: ['evaluation-run', id],
+    queryKey: ['evaluation-run', evaluationId, runId],
     queryFn: async (): Promise<EvaluationRunDetail> => {
-      const response = await apiClient.get<EvaluationRunDetail>(`/evaluations/runs/${id}`);
+      const response = await apiClient.get<EvaluationRunDetail>(
+        `/evaluations/${evaluationId}/runs/${runId}`
+      );
       return response.data;
     },
-    enabled: !!id,
+    enabled: !!evaluationId && !!runId,
   });
 }
 
-export function useCreateEvaluationRun() {
+export function useCreateEvaluationRun(evaluationId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (data: EvaluationRunCreateRequest): Promise<EvaluationRun> => {
-      const response = await apiClient.post<EvaluationRun>('/evaluations/runs', data);
+      const response = await apiClient.post<EvaluationRun>(
+        `/evaluations/${evaluationId}/runs`,
+        data
+      );
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['evaluation-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['evaluation-runs', evaluationId] });
+      queryClient.invalidateQueries({ queryKey: ['all-evaluation-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['evaluation', evaluationId] });
     },
   });
 }
 
-export function useExecuteEvaluationRun() {
+export function useExecuteEvaluationRun(evaluationId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (id: number): Promise<EvaluationRun> => {
-      const response = await apiClient.post<EvaluationRun>(`/evaluations/runs/${id}/execute`);
+    mutationFn: async (runId: number): Promise<EvaluationRun> => {
+      const response = await apiClient.post<EvaluationRun>(
+        `/evaluations/${evaluationId}/runs/${runId}/execute`
+      );
       return response.data;
     },
-    onSuccess: (data, id) => {
+    onSuccess: (data, runId) => {
       // Immediately update the cache with the "running" status from the response
-      // This ensures the UI shows "running" before any refetch can overwrite it
-      queryClient.setQueryData(['evaluation-run', id], (old: EvaluationRunDetail | undefined) => {
-        if (old) {
-          return { ...old, status: data.status, started_at: data.started_at };
+      queryClient.setQueryData(
+        ['evaluation-run', evaluationId, runId],
+        (old: EvaluationRunDetail | undefined) => {
+          if (old) {
+            return { ...old, status: data.status, started_at: data.started_at };
+          }
+          return data as EvaluationRunDetail;
         }
-        return data as EvaluationRunDetail;
-      });
-      // Only invalidate the runs list, not the individual run (polling will handle updates)
-      queryClient.invalidateQueries({ queryKey: ['evaluation-runs'] });
+      );
+      queryClient.invalidateQueries({ queryKey: ['evaluation-runs', evaluationId] });
+      queryClient.invalidateQueries({ queryKey: ['all-evaluation-runs'] });
     },
   });
 }
 
-export function useCancelEvaluationRun() {
+export function useCancelEvaluationRun(evaluationId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (id: number): Promise<EvaluationRun> => {
-      const response = await apiClient.post<EvaluationRun>(`/evaluations/runs/${id}/cancel`);
+    mutationFn: async (runId: number): Promise<EvaluationRun> => {
+      const response = await apiClient.post<EvaluationRun>(
+        `/evaluations/${evaluationId}/runs/${runId}/cancel`
+      );
       return response.data;
     },
-    onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: ['evaluation-runs'] });
-      queryClient.invalidateQueries({ queryKey: ['evaluation-run', id] });
+    onSuccess: (_, runId) => {
+      queryClient.invalidateQueries({ queryKey: ['evaluation-runs', evaluationId] });
+      queryClient.invalidateQueries({ queryKey: ['evaluation-run', evaluationId, runId] });
+      queryClient.invalidateQueries({ queryKey: ['all-evaluation-runs'] });
     },
   });
 }
 
-export function useDeleteEvaluationRun() {
+export function useDeleteEvaluationRun(evaluationId: number) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (id: number): Promise<void> => {
-      await apiClient.delete(`/evaluations/runs/${id}`);
+    mutationFn: async (runId: number): Promise<void> => {
+      await apiClient.delete(`/evaluations/${evaluationId}/runs/${runId}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['evaluation-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['evaluation-runs', evaluationId] });
+      queryClient.invalidateQueries({ queryKey: ['all-evaluation-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['evaluation', evaluationId] });
     },
   });
 }
@@ -545,6 +691,7 @@ export function useDeleteEvaluationRun() {
 // ============================================================================
 
 interface UseEvaluationResultsParams {
+  evaluationId: number;
   runId: number;
   page?: number;
   pageSize?: number;
@@ -553,10 +700,10 @@ interface UseEvaluationResultsParams {
 }
 
 export function useEvaluationResults(params: UseEvaluationResultsParams) {
-  const { runId, page = 1, pageSize = 50, passed, includeScores = false } = params;
+  const { evaluationId, runId, page = 1, pageSize = 50, passed, includeScores = false } = params;
 
   return useQuery({
-    queryKey: ['evaluation-results', runId, { page, pageSize, passed, includeScores }],
+    queryKey: ['evaluation-results', evaluationId, runId, { page, pageSize, passed, includeScores }],
     queryFn: async (): Promise<EvaluationResultListResponse> => {
       const searchParams = new URLSearchParams();
       searchParams.append('page', page.toString());
@@ -565,24 +712,28 @@ export function useEvaluationResults(params: UseEvaluationResultsParams) {
       if (includeScores) searchParams.append('include_scores', 'true');
 
       const response = await apiClient.get<EvaluationResultListResponse>(
-        `/evaluations/runs/${runId}/results?${searchParams.toString()}`
+        `/evaluations/${evaluationId}/runs/${runId}/results?${searchParams.toString()}`
       );
       return response.data;
     },
-    enabled: !!runId,
+    enabled: !!evaluationId && !!runId,
   });
 }
 
-export function useEvaluationResult(runId: number | undefined, resultId: number | undefined) {
+export function useEvaluationResult(
+  evaluationId: number | undefined,
+  runId: number | undefined,
+  resultId: number | undefined
+) {
   return useQuery({
-    queryKey: ['evaluation-result', runId, resultId],
+    queryKey: ['evaluation-result', evaluationId, runId, resultId],
     queryFn: async (): Promise<EvaluationResultDetail> => {
       const response = await apiClient.get<EvaluationResultDetail>(
-        `/evaluations/runs/${runId}/results/${resultId}`
+        `/evaluations/${evaluationId}/runs/${runId}/results/${resultId}`
       );
       return response.data;
     },
-    enabled: !!runId && !!resultId,
+    enabled: !!evaluationId && !!runId && !!resultId,
   });
 }
 
@@ -595,7 +746,7 @@ export function useCompareRuns(runIds: number[]) {
     queryKey: ['compare-runs', runIds],
     queryFn: async (): Promise<RunComparisonResponse> => {
       const response = await apiClient.get<RunComparisonResponse>(
-        `/evaluations/runs/compare?run_ids=${runIds.join(',')}`
+        `/evaluations/compare?run_ids=${runIds.join(',')}`
       );
       return response.data;
     },
@@ -607,14 +758,30 @@ export function useCompareRuns(runIds: number[]) {
 // Polling Hook for Running Evaluations
 // ============================================================================
 
-export function useEvaluationRunPolling(id: number | undefined, enabled: boolean = true) {
+export function useEvaluationRunPolling(
+  evaluationId: number | undefined,
+  runId: number | undefined,
+  enabled: boolean = true
+) {
+  const queryClient = useQueryClient();
+
   return useQuery({
-    queryKey: ['evaluation-run', id],
+    queryKey: ['evaluation-run', evaluationId, runId],
     queryFn: async (): Promise<EvaluationRunDetail> => {
-      const response = await apiClient.get<EvaluationRunDetail>(`/evaluations/runs/${id}`);
+      const response = await apiClient.get<EvaluationRunDetail>(
+        `/evaluations/${evaluationId}/runs/${runId}`
+      );
+
+      // Also invalidate results queries so the matrix view updates
+      if (evaluationId && runId) {
+        queryClient.invalidateQueries({
+          queryKey: ['evaluation-results', evaluationId, runId],
+        });
+      }
+
       return response.data;
     },
-    enabled: !!id && enabled,
+    enabled: !!evaluationId && !!runId && enabled,
     refetchInterval: (query) => {
       const data = query.state.data;
       // Poll every 2 seconds while running or evaluating

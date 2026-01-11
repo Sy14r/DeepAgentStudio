@@ -28,6 +28,7 @@ class User(Base):
     # Evaluation relationships
     evaluation_datasets = relationship("EvaluationDataset", back_populates="user", cascade="all, delete-orphan")
     evaluators = relationship("Evaluator", back_populates="user", cascade="all, delete-orphan")
+    evaluations = relationship("Evaluation", back_populates="user", cascade="all, delete-orphan")
     evaluation_runs = relationship("EvaluationRun", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):

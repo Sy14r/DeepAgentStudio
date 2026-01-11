@@ -61,11 +61,11 @@ class DatasetSchemaType(str, Enum):
     STRUCTURED = "structured"
 
 
-# Many-to-many association table for evaluation runs and evaluators
-evaluation_run_evaluators = Table(
-    'evaluation_run_evaluators',
+# Many-to-many association table for evaluations and evaluators
+evaluation_evaluators = Table(
+    'evaluation_evaluators',
     Base.metadata,
-    Column('run_id', Integer, ForeignKey('evaluation_runs.id', ondelete='CASCADE'), primary_key=True),
+    Column('evaluation_id', Integer, ForeignKey('evaluations.id', ondelete='CASCADE'), primary_key=True),
     Column('evaluator_id', Integer, ForeignKey('evaluators.id', ondelete='CASCADE'), primary_key=True)
 )
 
@@ -95,7 +95,7 @@ class EvaluationDataset(Base):
         cascade="all, delete-orphan",
         order_by="DatasetExample.id"
     )
-    evaluation_runs = relationship("EvaluationRun", back_populates="dataset")
+    evaluations = relationship("Evaluation", back_populates="dataset")
 
     def __repr__(self):
         return f"<EvaluationDataset(id={self.id}, name='{self.name}', examples={self.example_count})>"
@@ -125,6 +125,40 @@ class DatasetExample(Base):
         return f"<DatasetExample(id={self.id}, name='{self.name}', dataset_id={self.dataset_id})>"
 
 
+class Evaluation(Base):
+    """Reusable evaluation configuration - defines what to test and how to judge"""
+
+    __tablename__ = "evaluations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    dataset_id = Column(Integer, ForeignKey("evaluation_datasets.id", ondelete="CASCADE"), nullable=False, index=True)
+    config = Column(JSONB, nullable=False, default=dict)  # concurrency, timeout, sampling config
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="evaluations")
+    dataset = relationship("EvaluationDataset", back_populates="evaluations")
+    evaluators = relationship(
+        "Evaluator",
+        secondary=evaluation_evaluators,
+        back_populates="evaluations"
+    )
+    runs = relationship(
+        "EvaluationRun",
+        back_populates="evaluation",
+        cascade="all, delete-orphan",
+        order_by="EvaluationRun.id.desc()"
+    )
+
+    def __repr__(self):
+        return f"<Evaluation(id={self.id}, name='{self.name}', dataset_id={self.dataset_id})>"
+
+
 class Evaluator(Base):
     """Evaluator definition for judging agent outputs or run metadata"""
 
@@ -143,9 +177,9 @@ class Evaluator(Base):
 
     # Relationships
     user = relationship("User", back_populates="evaluators")
-    evaluation_runs = relationship(
-        "EvaluationRun",
-        secondary=evaluation_run_evaluators,
+    evaluations = relationship(
+        "Evaluation",
+        secondary=evaluation_evaluators,
         back_populates="evaluators"
     )
     scores = relationship("EvaluationScore", back_populates="evaluator")
@@ -155,21 +189,21 @@ class Evaluator(Base):
 
 
 class EvaluationRun(Base):
-    """An execution of a dataset against an agent configuration"""
+    """An execution of an evaluation against a specific agent"""
 
     __tablename__ = "evaluation_runs"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    name = Column(String(255), nullable=True)
-    dataset_id = Column(Integer, ForeignKey("evaluation_datasets.id", ondelete="CASCADE"), nullable=False, index=True)
+    evaluation_id = Column(Integer, ForeignKey("evaluations.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=True)  # Optional run-specific name
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     agent_version_id = Column(Integer, ForeignKey("agent_versions.id", ondelete="SET NULL"), nullable=True)
+    llm_provider_id = Column(Integer, ForeignKey("llm_provider_configs.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(String(20), nullable=False, default=EvaluationStatus.PENDING.value, index=True)
     progress = Column(Integer, nullable=False, default=0)
     total_examples = Column(Integer, nullable=False, default=0)
     completed_examples = Column(Integer, nullable=False, default=0)
-    config = Column(JSONB, nullable=False, default=dict)
     metrics = Column(JSONB, nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -177,14 +211,10 @@ class EvaluationRun(Base):
 
     # Relationships
     user = relationship("User", back_populates="evaluation_runs")
-    dataset = relationship("EvaluationDataset", back_populates="evaluation_runs")
+    evaluation = relationship("Evaluation", back_populates="runs")
     agent = relationship("Agent", back_populates="evaluation_runs")
     agent_version = relationship("AgentVersion")
-    evaluators = relationship(
-        "Evaluator",
-        secondary=evaluation_run_evaluators,
-        back_populates="evaluation_runs"
-    )
+    llm_provider = relationship("LLMProviderConfig")
     results = relationship(
         "EvaluationResult",
         back_populates="run",
@@ -192,8 +222,29 @@ class EvaluationRun(Base):
         order_by="EvaluationResult.id"
     )
 
+    # Convenience properties to access evaluation's config and dataset
+    @property
+    def config(self):
+        """Get config from the parent evaluation"""
+        return self.evaluation.config if self.evaluation else {}
+
+    @property
+    def dataset(self):
+        """Get dataset from the parent evaluation"""
+        return self.evaluation.dataset if self.evaluation else None
+
+    @property
+    def dataset_id(self):
+        """Get dataset_id from the parent evaluation"""
+        return self.evaluation.dataset_id if self.evaluation else None
+
+    @property
+    def evaluators(self):
+        """Get evaluators from the parent evaluation"""
+        return self.evaluation.evaluators if self.evaluation else []
+
     def __repr__(self):
-        return f"<EvaluationRun(id={self.id}, status='{self.status}', progress={self.progress}%)>"
+        return f"<EvaluationRun(id={self.id}, evaluation_id={self.evaluation_id}, status='{self.status}', progress={self.progress}%)>"
 
 
 class EvaluationResult(Base):

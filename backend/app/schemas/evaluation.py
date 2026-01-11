@@ -211,10 +211,10 @@ class EvaluatorTestResponse(BaseModel):
     error: Optional[str] = None
 
 
-# ===== Evaluation Run Schemas =====
+# ===== Evaluation Schemas (Reusable Config) =====
 
-class EvaluationRunConfig(BaseModel):
-    """Configuration for an evaluation run"""
+class EvaluationConfig(BaseModel):
+    """Configuration for an evaluation"""
     concurrency: int = Field(default=3, ge=1, le=10)
     timeout_per_example_ms: int = Field(default=60000, ge=1000, le=600000)
     retry_failed: bool = False
@@ -223,14 +223,65 @@ class EvaluationRunConfig(BaseModel):
     sample_seed: Optional[int] = None
 
 
-class EvaluationRunCreate(BaseModel):
-    """Schema for creating an evaluation run"""
-    name: Optional[str] = Field(None, max_length=255)
+class EvaluationCreate(BaseModel):
+    """Schema for creating an evaluation configuration"""
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
     dataset_id: int
+    evaluator_ids: list[int] = Field(..., min_length=1)
+    config: EvaluationConfig = Field(default_factory=EvaluationConfig)
+
+
+class EvaluationUpdate(BaseModel):
+    """Schema for updating an evaluation configuration"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    evaluator_ids: Optional[list[int]] = Field(None, min_length=1)
+    config: Optional[EvaluationConfig] = None
+
+
+class EvaluationResponse(BaseModel):
+    """Schema for evaluation responses"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    name: str
+    description: Optional[str] = None
+    dataset_id: int
+    config: dict[str, Any]
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Nested info (populated separately)
+    dataset_name: Optional[str] = None
+    evaluator_count: int = 0
+    run_count: int = 0
+
+
+class EvaluationDetailResponse(EvaluationResponse):
+    """Schema for detailed evaluation response with evaluators and recent runs"""
+    evaluators: list[EvaluatorResponse] = []
+    dataset: Optional[EvaluationDatasetResponse] = None
+
+
+class EvaluationListResponse(BaseModel):
+    """Schema for paginated evaluation list"""
+    evaluations: list[EvaluationResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+# ===== Evaluation Run Schemas =====
+
+class EvaluationRunCreate(BaseModel):
+    """Schema for creating an evaluation run (within an evaluation)"""
     agent_id: int
     agent_version_id: Optional[int] = None
-    evaluator_ids: list[int] = Field(..., min_length=1)
-    config: EvaluationRunConfig = Field(default_factory=EvaluationRunConfig)
+    name: Optional[str] = Field(None, max_length=255)  # Optional run-specific name
+    llm_provider_id: Optional[int] = None  # LLM provider for LLM-based evaluators
 
 
 class EvaluationRunResponse(BaseModel):
@@ -239,30 +290,32 @@ class EvaluationRunResponse(BaseModel):
 
     id: int
     user_id: int
+    evaluation_id: int
     name: Optional[str] = None
-    dataset_id: int
     agent_id: int
     agent_version_id: Optional[int] = None
+    llm_provider_id: Optional[int] = None
     status: EvaluationStatus
     progress: int
     total_examples: int
     completed_examples: int
     passed_examples: int = 0  # Computed from metrics
     failed_examples: int = 0  # Computed from metrics
-    config: dict[str, Any]
     metrics: Optional[dict[str, Any]] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime
 
-    # Nested info (populated separately)
+    # Nested info from evaluation (populated separately)
+    evaluation_name: Optional[str] = None
     dataset_name: Optional[str] = None
     agent_name: Optional[str] = None
 
 
 class EvaluationRunDetailResponse(EvaluationRunResponse):
-    """Schema for detailed run response with evaluators"""
-    evaluators: list[EvaluatorResponse] = []
+    """Schema for detailed run response with evaluation info"""
+    evaluation: Optional[EvaluationResponse] = None
+    evaluators: list[EvaluatorResponse] = []  # From evaluation
 
 
 class EvaluationRunListResponse(BaseModel):

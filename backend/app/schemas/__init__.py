@@ -96,6 +96,7 @@ from .evaluation import (
     EvaluatorCategory,
     EvaluatorType,
     EvaluationStatus,
+    EvaluationScoreStatus,
     DatasetSchemaType,
     # Dataset schemas
     DatasetExampleBase,
@@ -117,8 +118,14 @@ from .evaluation import (
     EvaluatorListResponse,
     EvaluatorTestRequest,
     EvaluatorTestResponse,
+    # Evaluation config schemas (reusable)
+    EvaluationConfig,
+    EvaluationCreate,
+    EvaluationUpdate,
+    EvaluationResponse,
+    EvaluationDetailResponse,
+    EvaluationListResponse,
     # Evaluation run schemas
-    EvaluationRunConfig,
     EvaluationRunCreate,
     EvaluationRunResponse,
     EvaluationRunDetailResponse,
@@ -247,6 +254,7 @@ __all__ = [
     "EvaluatorCategory",
     "EvaluatorType",
     "EvaluationStatus",
+    "EvaluationScoreStatus",
     "DatasetSchemaType",
     "DatasetExampleBase",
     "DatasetExampleCreate",
@@ -266,7 +274,14 @@ __all__ = [
     "EvaluatorListResponse",
     "EvaluatorTestRequest",
     "EvaluatorTestResponse",
-    "EvaluationRunConfig",
+    # Evaluation config schemas
+    "EvaluationConfig",
+    "EvaluationCreate",
+    "EvaluationUpdate",
+    "EvaluationResponse",
+    "EvaluationDetailResponse",
+    "EvaluationListResponse",
+    # Evaluation run schemas
     "EvaluationRunCreate",
     "EvaluationRunResponse",
     "EvaluationRunDetailResponse",

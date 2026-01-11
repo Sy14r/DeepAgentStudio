@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -41,7 +41,21 @@ import {
   Minus,
   FlaskConical,
   ExternalLink,
+  Timer,
+  Zap,
 } from 'lucide-react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from 'recharts';
 import {
   useEvaluationRun,
   useEvaluationResults,
@@ -51,7 +65,249 @@ import {
   useDatasetExamples,
   getErrorMessage,
 } from '@/api/hooks';
-import { EvaluationStatus } from '@/api/types';
+import { EvaluationStatus, EvaluationRunDetail, EvaluationResultListResponse } from '@/api/types';
+
+// Chart colors
+const CHART_COLORS = {
+  primary: 'hsl(var(--primary))',
+  success: '#22c55e',
+  warning: '#eab308',
+  danger: '#ef4444',
+  muted: 'hsl(var(--muted-foreground))',
+};
+
+const PIE_COLORS = ['#22c55e', '#ef4444', '#eab308', '#6b7280'];
+
+interface EvaluatorScore {
+  evaluator_id: number;
+  evaluator_name: string;
+  evaluator_type: string;
+  category: string;
+  pass_rate: number;
+  avg_score: number;
+  total_evaluated: number;
+}
+
+interface RunVisualizationsProps {
+  run: EvaluationRunDetail;
+  resultsData?: EvaluationResultListResponse | null;
+}
+
+function RunVisualizations({ run, resultsData }: RunVisualizationsProps) {
+  // Extract evaluator scores from metrics
+  const evaluatorScores = useMemo(() => {
+    const scores = (run.metrics as Record<string, unknown>)?.evaluator_scores as EvaluatorScore[] | undefined;
+    if (!scores || !Array.isArray(scores)) return [];
+    return scores.map((s) => ({
+      name: s.evaluator_name.length > 12 ? s.evaluator_name.slice(0, 12) + '...' : s.evaluator_name,
+      fullName: s.evaluator_name,
+      passRate: Math.round(s.pass_rate * 100),
+      avgScore: Math.round(s.avg_score * 100),
+      type: s.evaluator_type,
+      evaluated: s.total_evaluated,
+    }));
+  }, [run.metrics]);
+
+  // Score distribution for pie chart
+  const scoreDistribution = useMemo(() => {
+    const passed = run.passed_examples || 0;
+    const failed = run.failed_examples || 0;
+    const total = run.total_examples || 0;
+    const other = total - passed - failed;
+
+    const data = [];
+    if (passed > 0) data.push({ name: 'Passed', value: passed, color: PIE_COLORS[0] });
+    if (failed > 0) data.push({ name: 'Failed', value: failed, color: PIE_COLORS[1] });
+    if (other > 0) data.push({ name: 'Other', value: other, color: PIE_COLORS[3] });
+    return data;
+  }, [run]);
+
+  // Latency distribution from results
+  const latencyData = useMemo(() => {
+    if (!resultsData?.results) return [];
+
+    const buckets = [
+      { range: '<1s', min: 0, max: 1000, count: 0 },
+      { range: '1-5s', min: 1000, max: 5000, count: 0 },
+      { range: '5-10s', min: 5000, max: 10000, count: 0 },
+      { range: '10-30s', min: 10000, max: 30000, count: 0 },
+      { range: '30s+', min: 30000, max: Infinity, count: 0 },
+    ];
+
+    resultsData.results.forEach((result) => {
+      const latency = result.latency_ms || 0;
+      for (const bucket of buckets) {
+        if (latency >= bucket.min && latency < bucket.max) {
+          bucket.count++;
+          break;
+        }
+      }
+    });
+
+    return buckets.filter((b) => b.count > 0).map((b) => ({
+      range: b.range,
+      count: b.count,
+    }));
+  }, [resultsData]);
+
+  // Resource usage stats
+  const resourceStats = useMemo(() => {
+    const metrics = run.metrics as Record<string, unknown> | null;
+    if (!metrics) return null;
+
+    const totalTokens = (metrics.total_tokens as number) || 0;
+    const totalCost = (metrics.total_cost as number) || 0;
+    const avgLatency = (metrics.avg_latency_ms as number) || 0;
+
+    return {
+      totalTokens,
+      totalCost,
+      avgLatency,
+    };
+  }, [run.metrics]);
+
+  if (!evaluatorScores.length && !scoreDistribution.length) {
+    return null;
+  }
+
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Evaluator Performance Chart */}
+      {evaluatorScores.length > 0 && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <FlaskConical className="h-4 w-4 text-muted-foreground" />
+            Evaluator Performance
+          </div>
+          <div className="h-32">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={evaluatorScores} layout="vertical" margin={{ left: 0, right: 8, top: 0, bottom: 0 }}>
+                <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 10 }} />
+                <YAxis type="category" dataKey="name" width={70} tick={{ fontSize: 10 }} />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-popover border rounded-lg shadow-lg p-2 text-xs">
+                        <p className="font-medium">{data.fullName}</p>
+                        <p>Pass Rate: {data.passRate}%</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="passRate" fill={CHART_COLORS.primary} radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Score Distribution Pie Chart */}
+      {scoreDistribution.length > 0 && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            Results
+          </div>
+          <div className="h-32">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={scoreDistribution}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={30}
+                  outerRadius={50}
+                  paddingAngle={2}
+                  dataKey="value"
+                >
+                  {scoreDistribution.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-popover border rounded-lg shadow-lg p-2 text-xs">
+                        <p className="font-medium">{data.name}: {data.value}</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: '10px' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Latency Distribution */}
+      {latencyData.length > 0 && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <Timer className="h-4 w-4 text-muted-foreground" />
+            Latency
+          </div>
+          <div className="h-32">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={latencyData} margin={{ left: 0, right: 8, top: 0, bottom: 0 }}>
+                <XAxis dataKey="range" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} width={25} />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const data = payload[0].payload;
+                    return (
+                      <div className="bg-popover border rounded-lg shadow-lg p-2 text-xs">
+                        <p className="font-medium">{data.range}: {data.count}</p>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar dataKey="count" fill={CHART_COLORS.warning} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      {/* Resource Usage Summary */}
+      {resourceStats && (resourceStats.totalTokens > 0 || resourceStats.avgLatency > 0) && (
+        <Card className="p-3">
+          <div className="text-sm font-medium flex items-center gap-1.5 mb-2">
+            <Zap className="h-4 w-4 text-muted-foreground" />
+            Resources
+          </div>
+          <div className="h-32 flex flex-col justify-center gap-2">
+            <div className="text-center p-2 bg-muted/50 rounded">
+              <div className="text-lg font-bold">{resourceStats.totalTokens.toLocaleString()}</div>
+              <div className="text-xs text-muted-foreground">Tokens</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="text-center p-2 bg-muted/50 rounded">
+                <div className="text-sm font-bold">
+                  {resourceStats.avgLatency > 1000
+                    ? `${(resourceStats.avgLatency / 1000).toFixed(1)}s`
+                    : `${Math.round(resourceStats.avgLatency)}ms`}
+                </div>
+                <div className="text-xs text-muted-foreground">Latency</div>
+              </div>
+              <div className="text-center p-2 bg-muted/50 rounded">
+                <div className="text-sm font-bold">
+                  {resourceStats.totalCost > 0 ? `$${resourceStats.totalCost.toFixed(2)}` : '-'}
+                </div>
+                <div className="text-xs text-muted-foreground">Cost</div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
 
 const STATUS_CONFIG: Record<
   EvaluationStatus,
@@ -67,10 +323,11 @@ const STATUS_CONFIG: Record<
 };
 
 export function RunDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id: evaluationIdParam, runId: runIdParam } = useParams<{ id: string; runId: string }>();
   const navigate = useNavigate();
 
-  const runId = id ? parseInt(id) : null;
+  const evaluationId = evaluationIdParam ? parseInt(evaluationIdParam) : null;
+  const runId = runIdParam ? parseInt(runIdParam) : null;
 
   // Results pagination
   const [resultsPage, setResultsPage] = useState(1);
@@ -79,9 +336,13 @@ export function RunDetailPage() {
   // Error state
   const [error, setError] = useState<string | null>(null);
 
-  // Data hooks
-  const { data: run, isLoading: isLoadingRun, refetch: refetchRun } = useEvaluationRun(runId ?? undefined);
+  // Data hooks - now use evaluation_id and run_id
+  const { data: run, isLoading: isLoadingRun, refetch: refetchRun } = useEvaluationRun(
+    evaluationId ?? undefined,
+    runId ?? undefined
+  );
   const { data: resultsData, isLoading: isLoadingResults } = useEvaluationResults({
+    evaluationId: evaluationId ?? 0,
     runId: runId ?? 0,
     page: resultsPage,
     pageSize: 20,
@@ -90,6 +351,7 @@ export function RunDetailPage() {
 
   // Fetch all results with scores for the matrix view (only when run exists)
   const { data: matrixResultsData, isLoading: isLoadingMatrixResults } = useEvaluationResults({
+    evaluationId: evaluationId ?? 0,
     runId: runId ?? 0,
     page: 1,
     pageSize: 200, // Backend max is 200
@@ -98,16 +360,20 @@ export function RunDetailPage() {
 
   // Fetch dataset examples for the matrix view
   const { data: datasetExamplesData, isLoading: isLoadingExamples } = useDatasetExamples({
-    datasetId: run?.dataset_id ?? 0,
+    datasetId: run?.evaluation?.dataset_id ?? 0,
     page: 1,
     pageSize: 200, // Backend max is 200
   });
 
   // Use polling for running/evaluating evaluations
-  useEvaluationRunPolling(runId ?? 0, run?.status === 'running' || run?.status === 'evaluating');
+  useEvaluationRunPolling(
+    evaluationId ?? undefined,
+    runId ?? undefined,
+    run?.status === 'running' || run?.status === 'evaluating'
+  );
 
-  const executeRun = useExecuteEvaluationRun();
-  const cancelRun = useCancelEvaluationRun();
+  const executeRun = useExecuteEvaluationRun(evaluationId ?? 0);
+  const cancelRun = useCancelEvaluationRun(evaluationId ?? 0);
 
   const handleExecute = async () => {
     if (!runId) return;
@@ -132,7 +398,11 @@ export function RunDetailPage() {
   };
 
   const handleBack = () => {
-    navigate('/evaluations');
+    if (evaluationId) {
+      navigate(`/evaluations/${evaluationId}`);
+    } else {
+      navigate('/evaluations?tab=evaluations');
+    }
   };
 
   const results = resultsData?.results || [];
@@ -167,8 +437,8 @@ export function RunDetailPage() {
   const avgScore = typeof run.metrics?.avg_score === 'number' ? run.metrics.avg_score : 0;
 
   const breadcrumbItems = [
-    { label: 'Evaluations', href: '/evaluations?tab=runs', icon: ClipboardList },
-    { label: 'Runs', href: '/evaluations?tab=runs' },
+    { label: 'Evaluations', href: '/evaluations?tab=evaluations', icon: ClipboardList },
+    { label: run.evaluation_name || 'Evaluation', href: evaluationId ? `/evaluations/${evaluationId}` : undefined },
     { label: run.name || `Run #${run.id}`, icon: PlayCircle },
   ];
 
@@ -370,6 +640,11 @@ export function RunDetailPage() {
             </Card>
           </div>
 
+          {/* Visualizations - show prominently when run has completed */}
+          {run.status === 'completed' && run.metrics && (
+            <RunVisualizations run={run} resultsData={matrixResultsData} />
+          )}
+
           {/* Metrics breakdown */}
           {run.metrics && Object.keys(run.metrics).length > 0 && (
             <Card>
@@ -419,7 +694,7 @@ export function RunDetailPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">Evaluators:</span>
-                  <div className="font-medium">{run.evaluators?.length || 0}</div>
+                  <div className="font-medium">{run.evaluators?.length || run.evaluation?.evaluator_count || 0}</div>
                   {run.evaluators && run.evaluators.length > 0 && (
                     <div className="text-xs text-muted-foreground truncate" title={run.evaluators.map(e => e.name).join(', ')}>
                       {run.evaluators.map(e => e.name).join(', ')}
@@ -434,8 +709,8 @@ export function RunDetailPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">Total Tests:</span>
-                  <div className="font-medium">{run.total_examples * (run.evaluators?.length || 0)}</div>
-                  <div className="text-xs text-muted-foreground">{run.total_examples} examples × {run.evaluators?.length || 0} evaluators</div>
+                  <div className="font-medium">{run.total_examples * (run.evaluators?.length || run.evaluation?.evaluator_count || 0)}</div>
+                  <div className="text-xs text-muted-foreground">{run.total_examples} examples × {run.evaluators?.length || run.evaluation?.evaluator_count || 0} evaluators</div>
                 </div>
               </div>
             </CardContent>
@@ -535,13 +810,18 @@ export function RunDetailPage() {
                               </td>
                               <td className="p-3 text-sm">
                                 {result ? (
-                                  result.status === 'pending' || result.status === 'running' ? (
-                                    <div className="flex items-center gap-1 text-muted-foreground">
-                                      <RefreshCw className="h-3 w-3 animate-spin" />
-                                      <span className="text-xs">Running...</span>
-                                    </div>
-                                  ) : (
-                                    <div className="flex flex-col gap-1">
+                                  <div className="flex flex-col gap-1">
+                                    {result.status === 'pending' || result.status === 'running' ? (
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <RefreshCw className="h-3 w-3 animate-spin" />
+                                        <span className="text-xs">Running...</span>
+                                      </div>
+                                    ) : result.status === 'evaluating' ? (
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <FlaskConical className="h-3 w-3 animate-pulse text-purple-500" />
+                                        <span className="text-xs">Evaluating...</span>
+                                      </div>
+                                    ) : (
                                       <div
                                         className="truncate max-w-[150px] text-muted-foreground"
                                         title={
@@ -560,22 +840,23 @@ export function RunDetailPage() {
                                         {result.agent_output != null &&
                                           (typeof result.agent_output === 'string' ? result.agent_output : JSON.stringify(result.agent_output)).length > 40 && '...'}
                                       </div>
-                                      {(result.run_metadata as Record<string, unknown>)?.session_id && (
-                                        <a
-                                          href={`/sessions/${(result.run_metadata as Record<string, unknown>).session_id}`}
-                                          className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
-                                          title="View agent execution session"
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            navigate(`/sessions/${(result.run_metadata as Record<string, unknown>).session_id}`);
-                                          }}
-                                        >
-                                          <ExternalLink className="h-3 w-3" />
-                                          View Session
-                                        </a>
-                                      )}
-                                    </div>
-                                  )
+                                    )}
+                                    {/* Always show session link if available, even while running */}
+                                    {!!(result.run_metadata as Record<string, unknown> | null)?.session_id && (
+                                      <a
+                                        href={`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`}
+                                        className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                                        title="View agent execution session"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          navigate(`/sessions/${String((result.run_metadata as Record<string, unknown>).session_id)}`);
+                                        }}
+                                      >
+                                        <ExternalLink className="h-3 w-3" />
+                                        View Session
+                                      </a>
+                                    )}
+                                  </div>
                                 ) : (
                                   <div className="flex items-center">
                                     <Minus className="h-4 w-4 text-muted-foreground" />
@@ -601,6 +882,16 @@ export function RunDetailPage() {
                                     <td key={evaluator.id} className="p-3 text-center">
                                       <div className="flex items-center justify-center">
                                         <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                if (result.status === 'evaluating' && !score) {
+                                  return (
+                                    <td key={evaluator.id} className="p-3 text-center">
+                                      <div className="flex items-center justify-center">
+                                        <FlaskConical className="h-4 w-4 text-purple-500 animate-pulse" />
                                       </div>
                                     </td>
                                   );
@@ -658,6 +949,10 @@ export function RunDetailPage() {
                                   <div className="flex items-center justify-center">
                                     <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
                                   </div>
+                                ) : result.status === 'evaluating' ? (
+                                  <div className="flex items-center justify-center">
+                                    <FlaskConical className="h-4 w-4 text-purple-500 animate-pulse" />
+                                  </div>
                                 ) : (
                                   <div className="flex flex-col items-center gap-1">
                                     {result.passed === true ? (
@@ -696,7 +991,11 @@ export function RunDetailPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <RefreshCw className="h-4 w-4 text-blue-500" />
-                  <span>Running</span>
+                  <span>Agent Running</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <FlaskConical className="h-4 w-4 text-purple-500" />
+                  <span>Evaluating</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Minus className="h-4 w-4 text-muted-foreground" />
@@ -708,7 +1007,7 @@ export function RunDetailPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ExternalLink className="h-4 w-4 text-blue-500" />
-                  <span>View Session (Agent or Evaluator)</span>
+                  <span>View Session</span>
                 </div>
               </div>
             </>

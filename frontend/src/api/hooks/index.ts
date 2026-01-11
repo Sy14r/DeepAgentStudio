@@ -106,8 +106,15 @@ export {
   useCloneEvaluator,
   useTestEvaluator,
   useSeedBuiltinEvaluators,
+  // Evaluation config hooks
+  useEvaluations,
+  useEvaluation,
+  useCreateEvaluation,
+  useUpdateEvaluation,
+  useDeleteEvaluation,
   // Evaluation run hooks
   useEvaluationRuns,
+  useAllEvaluationRuns,
   useEvaluationRun,
   useCreateEvaluationRun,
   useExecuteEvaluationRun,

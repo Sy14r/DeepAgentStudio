@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, Spinner } from '@/components/ui';
-import { Bot, Wrench, FileText, Play, History, TrendingUp } from 'lucide-react';
+import { Bot, Wrench, FileText, Play, History, TrendingUp, Database, ClipboardList } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useAgents, useTools, usePrompts, useSessions } from '@/api/hooks';
+import { useAgents, useTools, usePrompts, useSessions, useDatasets, useEvaluations } from '@/api/hooks';
 import { formatDistanceToNow } from 'date-fns';
 
 interface StatCardProps {
@@ -37,7 +37,9 @@ export function DashboardPage() {
   const { data: agentsData, isLoading: agentsLoading } = useAgents({ pageSize: 1 });
   const { data: toolsData, isLoading: toolsLoading } = useTools({ pageSize: 1 });
   const { data: promptsData, isLoading: promptsLoading } = usePrompts({ pageSize: 1 });
-  const { data: sessionsData, isLoading: sessionsLoading } = useSessions({ pageSize: 5 });
+  const { data: sessionsData, isLoading: sessionsLoading } = useSessions({ pageSize: 5, excludeEvaluation: true });
+  const { data: datasetsData, isLoading: datasetsLoading } = useDatasets({ pageSize: 1 });
+  const { data: evaluationsData, isLoading: evaluationsLoading } = useEvaluations({ pageSize: 1 });
 
   const recentSessions = sessionsData?.sessions || [];
 
@@ -50,7 +52,7 @@ export function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         <StatCard
           title="Agents"
           value={agentsData?.total ?? 0}
@@ -82,6 +84,22 @@ export function DashboardPage() {
           icon={History}
           href="/sessions"
           isLoading={sessionsLoading}
+        />
+        <StatCard
+          title="Datasets"
+          value={datasetsData?.total ?? 0}
+          description="Eval datasets"
+          icon={Database}
+          href="/evaluations?tab=datasets"
+          isLoading={datasetsLoading}
+        />
+        <StatCard
+          title="Evaluations"
+          value={evaluationsData?.total ?? 0}
+          description="Configured evals"
+          icon={ClipboardList}
+          href="/evaluations?tab=evaluations"
+          isLoading={evaluationsLoading}
         />
       </div>
 

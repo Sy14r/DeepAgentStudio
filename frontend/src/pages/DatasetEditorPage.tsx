@@ -89,6 +89,7 @@ export function DatasetEditorPage() {
   // Editor state
   const [error, setError] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [activeTab, setActiveTab] = useState('settings');
 
   // Example management state
   const [examplePage, setExamplePage] = useState(1);
@@ -142,12 +143,23 @@ export function DatasetEditorPage() {
     }
   }, [isEditing, dataset]);
 
-  // Track unsaved changes
+  // Track unsaved changes by comparing with original dataset values
   useEffect(() => {
-    if (!isLoadingDataset && (name || description)) {
-      setHasUnsavedChanges(true);
+    if (isLoadingDataset) return;
+
+    if (isEditing && dataset) {
+      // Compare current values with original dataset values
+      const nameChanged = name !== dataset.name;
+      const descriptionChanged = description !== (dataset.description || '');
+      const schemaTypeChanged = schemaType !== dataset.schema_type;
+      const tagsChanged = JSON.stringify(tags) !== JSON.stringify(dataset.tags || []);
+
+      setHasUnsavedChanges(nameChanged || descriptionChanged || schemaTypeChanged || tagsChanged);
+    } else if (!isEditing) {
+      // For new datasets, mark as unsaved if there's any content
+      setHasUnsavedChanges(name.length > 0 || description.length > 0);
     }
-  }, [name, description, schemaType, tags]);
+  }, [name, description, schemaType, tags, dataset, isEditing, isLoadingDataset]);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -388,7 +400,7 @@ export function DatasetEditorPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
               {name || 'New Dataset'}
-              {hasUnsavedChanges && (
+              {hasUnsavedChanges && activeTab === 'settings' && (
                 <Badge variant="outline" className="text-yellow-600">
                   Unsaved
                 </Badge>
@@ -402,16 +414,18 @@ export function DatasetEditorPage() {
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={handleCancel}>
             <X className="mr-2 h-4 w-4" />
-            Cancel
+            {isEditing ? 'Close' : 'Cancel'}
           </Button>
-          <Button onClick={handleSave} disabled={isPending}>
-            {isPending ? (
-              <Spinner className="mr-2 h-4 w-4" />
-            ) : (
-              <Save className="mr-2 h-4 w-4" />
-            )}
-            {isEditing ? 'Save' : 'Create'}
-          </Button>
+          {activeTab === 'settings' && (
+            <Button onClick={handleSave} disabled={isPending}>
+              {isPending ? (
+                <Spinner className="mr-2 h-4 w-4" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              {isEditing ? 'Save' : 'Create'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -424,7 +438,7 @@ export function DatasetEditorPage() {
       )}
 
       {/* Main content */}
-      <Tabs defaultValue="settings">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="settings">Settings</TabsTrigger>
           {isEditing && <TabsTrigger value="examples">Examples ({totalExamples})</TabsTrigger>}

@@ -180,7 +180,7 @@ function JsonPrettifier({ data }: { data: unknown }): JSX.Element {
   const parsedData = deepParseJson(data);
 
   return (
-    <pre className="text-xs bg-background/50 rounded p-2 mt-2 overflow-hidden whitespace-pre-wrap break-all font-mono">
+    <pre className="text-xs bg-background/50 rounded p-2 mt-2 overflow-x-auto whitespace-pre-wrap break-all font-mono max-w-full">
       <JsonValue value={parsedData} />
     </pre>
   );
@@ -296,7 +296,7 @@ function TraceStepItem({ step }: { step: TraceStepDisplay }) {
   };
 
   return (
-    <div className={`rounded-lg border p-3 overflow-hidden min-w-0 ${getStepColor()}`}>
+    <div className={`rounded-lg border p-3 overflow-hidden w-full ${getStepColor()}`}>
       <div className="flex items-center gap-2 mb-2 min-w-0">
         <span className="shrink-0">{getStepIcon()}</span>
         <span className="font-medium capitalize text-sm truncate">
@@ -328,7 +328,7 @@ function TraceStepItem({ step }: { step: TraceStepDisplay }) {
       </div>
 
       {/* Collapsible content */}
-      <div className={isExpanded ? '' : 'max-h-24 overflow-hidden relative'}>
+      <div className={`overflow-hidden max-w-full ${isExpanded ? '' : 'max-h-24 relative'}`}>
         {step.content && (
           <p className="text-sm text-muted-foreground whitespace-pre-wrap break-words overflow-hidden">
             {step.content}
@@ -909,19 +909,21 @@ export function PlaygroundPage() {
               )}
             </div>
           </CardHeader>
-          <CardContent className="flex-1 p-0 min-h-0">
-            <ScrollArea className="h-full p-4">
-              {traceSteps.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-muted-foreground text-center">
-                  Execution trace will appear here during conversations.
-                </div>
-              ) : (
-                <div className="space-y-3 overflow-hidden w-full">
-                  {traceSteps.map((step, index) => (
-                    <TraceStepItem key={`${step.id}-${index}`} step={step} />
-                  ))}
-                </div>
-              )}
+          <CardContent className="flex-1 p-0 min-h-0 overflow-hidden">
+            <ScrollArea className="h-full w-full">
+              <div className="p-4 w-0 min-w-full">
+                {traceSteps.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-muted-foreground text-center">
+                    Execution trace will appear here during conversations.
+                  </div>
+                ) : (
+                  <div className="space-y-3 overflow-hidden">
+                    {traceSteps.map((step, index) => (
+                      <TraceStepItem key={`${step.id}-${index}`} step={step} />
+                    ))}
+                  </div>
+                )}
+              </div>
             </ScrollArea>
           </CardContent>
         </Card>

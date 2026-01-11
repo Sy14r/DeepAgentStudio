@@ -15,6 +15,8 @@ export { SessionsPage } from './SessionsPage';
 export { TraceExplorerPage } from './TraceExplorerPage';
 export { SettingsPage } from './SettingsPage';
 export { default as EvaluationsPage } from './EvaluationsPage';
+export { default as EvaluationDetailPage } from './EvaluationDetailPage';
 export { DatasetEditorPage } from './DatasetEditorPage';
 export { EvaluatorEditorPage } from './EvaluatorEditorPage';
 export { RunDetailPage } from './RunDetailPage';
+export { EvaluationEditorPage } from './EvaluationEditorPage';
