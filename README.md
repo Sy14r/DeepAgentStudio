@@ -265,6 +265,8 @@ DeepAgentStudio/
 │   └── tests/             # Vitest test files
 ├── docker-compose.yml
 ├── STATUS.md              # Development status
+├── SECURITY.md            # Security notes
+├── LICENSE.md             # Project Licensing Terms
 ├── CLAUDE.md              # AI assistant guidelines
 └── README.md              # This file
 ```
@@ -403,4 +405,4 @@ Key configuration (see `backend/.env.example`):
 
 ## License
 
-[Add license information]
+[AGPLv3 License](./LICENSE.md)
