@@ -25,6 +25,11 @@ class User(Base):
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     llm_provider_configs = relationship("LLMProviderConfig", back_populates="user", cascade="all, delete-orphan")
     mcp_server_configs = relationship("MCPServerConfig", back_populates="user", cascade="all, delete-orphan")
+    # Evaluation relationships
+    evaluation_datasets = relationship("EvaluationDataset", back_populates="user", cascade="all, delete-orphan")
+    evaluators = relationship("Evaluator", back_populates="user", cascade="all, delete-orphan")
+    evaluations = relationship("Evaluation", back_populates="user", cascade="all, delete-orphan")
+    evaluation_runs = relationship("EvaluationRun", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"

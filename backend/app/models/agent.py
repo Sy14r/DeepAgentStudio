@@ -47,6 +47,7 @@ class Agent(Base):
         secondary="agent_mcp_servers",
         back_populates="agents"
     )
+    evaluation_runs = relationship("EvaluationRun", back_populates="agent")
 
     def __repr__(self):
         type_name = self.agent_type_config.name if self.agent_type_config else "unknown"

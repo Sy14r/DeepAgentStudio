@@ -816,6 +816,7 @@ export function SessionsPage() {
     pageSize,
     status: statusFilter !== 'all' ? (statusFilter as SessionStatus) : undefined,
     agentId: agentFilter !== 'all' ? parseInt(agentFilter) : undefined,
+    excludeEvaluation: true,
   });
 
   const { data: stats } = useSessionStatistics(

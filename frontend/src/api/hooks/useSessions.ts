@@ -11,13 +11,14 @@ interface UseSessionsParams {
   pageSize?: number;
   agentId?: number;
   status?: SessionStatus;
+  excludeEvaluation?: boolean;
 }
 
 export function useSessions(params: UseSessionsParams = {}) {
-  const { page = 1, pageSize = 10, agentId, status } = params;
+  const { page = 1, pageSize = 10, agentId, status, excludeEvaluation } = params;
 
   return useQuery({
-    queryKey: ['sessions', { page, pageSize, agentId, status }],
+    queryKey: ['sessions', { page, pageSize, agentId, status, excludeEvaluation }],
     queryFn: async () => {
       const searchParams = new URLSearchParams({
         page: page.toString(),
@@ -29,6 +30,9 @@ export function useSessions(params: UseSessionsParams = {}) {
       }
       if (status) {
         searchParams.append('status', status);
+      }
+      if (excludeEvaluation) {
+        searchParams.append('exclude_evaluation', 'true');
       }
 
       const response = await apiClient.get<SessionListResponse>(

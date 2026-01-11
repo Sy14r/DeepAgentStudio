@@ -1,6 +1,6 @@
 # DeepAgentStudio - Development Status
 
-**Last Updated**: 2026-01-08
+**Last Updated**: 2026-01-09
 
 ## Executive Summary
 
@@ -13,11 +13,134 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 **Backend Phases Completed**: 7/7 (100%)
 **Frontend Phases Completed**: 2/2 planned phases (100% of MVP)
 **Advanced Agent Toolkit**: 6/6 phases (100%)
+**Evaluation System**: Backend 100%, Frontend In Progress
 **Overall MVP Completion**: 100%
 
 ---
 
-## Recent Updates (2026-01-08)
+## Recent Updates (2026-01-09)
+
+### Evaluation System - Frontend In Progress
+
+**Goal**: Complete frontend UI for the evaluation system including datasets, evaluators, and runs management.
+
+**Phase 5: Frontend - Datasets & Evaluators** - In Progress
+- EvaluationsPage with 3-tab interface (Datasets, Evaluators, Runs)
+- DatasetEditorPage with split layout (metadata form + examples table)
+- EvaluatorEditorPage with type-specific configuration forms
+- Full CRUD operations for datasets, examples, and evaluators
+- Import/export functionality for datasets (CSV/JSON)
+- Clone evaluator functionality
+
+**Phase 6: Frontend - Evaluation Runs** - In Progress
+- RunDetailPage with results visualization
+- Run creation wizard (dataset → agent → evaluators → config)
+- Real-time progress tracking via WebSocket
+- Results table with filtering and pagination
+
+**Files Created/Modified**:
+- `frontend/src/pages/EvaluationsPage.tsx` - Main evaluations hub with tabs
+- `frontend/src/pages/DatasetEditorPage.tsx` - Dataset and examples editor
+- `frontend/src/pages/EvaluatorEditorPage.tsx` - Evaluator configuration
+- `frontend/src/pages/RunDetailPage.tsx` - Evaluation run results
+- `frontend/src/api/hooks/useEvaluations.ts` - API hooks for all evaluation operations
+- `frontend/src/api/types.ts` - TypeScript types for evaluation entities
+- `frontend/src/components/ui/breadcrumb.tsx` - Breadcrumb navigation component
+
+**Frontend Pages Total**: 20 (was 16, added 4 evaluation pages)
+
+---
+
+## Previous Updates (2026-01-08)
+
+### Evaluation System - Backend Complete
+
+**Goal**: Comprehensive evaluation framework for testing agent performance against datasets with multiple evaluator types.
+
+**Phase 1: Database & Models** - Complete
+- 7 new database tables: evaluation_datasets, dataset_examples, evaluators, evaluation_runs, evaluation_run_evaluators, evaluation_results, evaluation_scores
+- SQLAlchemy models with full relationships and cascade deletes
+- Pydantic schemas for all CRUD operations, metrics, and WebSocket events
+- Dataset service with CRUD, batch operations, CSV/JSON import/export
+- Evaluator service with CRUD, seeding, cloning support
+
+**Phase 1 Files**:
+- `backend/alembic/versions/a1b2c3d4e5f6_add_evaluation_tables.py` - Migration
+- `backend/app/models/evaluation.py` - SQLAlchemy models (6 models, 4 enums)
+- `backend/app/schemas/evaluation.py` - Pydantic schemas (40+ schemas)
+- `backend/app/services/dataset_service.py` - Dataset & example CRUD
+- `backend/app/services/evaluator_service.py` - Evaluator CRUD with 17 built-in definitions
+
+**Phase 2: Evaluator Engine** - Complete
+- Abstract base evaluator with category support (output vs run_metadata)
+- Factory pattern for evaluator instantiation
+- 17 evaluator implementations in 2 categories
+
+**Output Evaluators (7)**:
+- Exact Match - String comparison with normalization options
+- Contains - Substring checking
+- Regex Match - Pattern matching with configurable flags
+- JSON Match - Structure comparison with ignore_order, subset_match
+- Semantic Similarity - Word overlap fallback (placeholder for embeddings)
+- LLM Judge - Configurable criteria (placeholder for LLM API)
+- Custom Code - Sandboxed execution (placeholder)
+
+**Run Metadata Evaluators (10)**:
+- Token Efficiency - Input/output/total token limits
+- Latency Threshold - Response time limits with warning levels
+- Cost Threshold - Budget enforcement
+- Chain Length - Step count limits with optimal target
+- Tool Call Success Rate - Success percentage tracking
+- Tool Selection - Required/forbidden/preferred tool validation
+- Error Rate - Error and retry counting
+- Span Count - Total/LLM/tool span limits
+- Custom Metadata - User-defined logic (placeholder)
+
+**Phase 2 Files**:
+- `backend/app/services/evaluator_engine.py` - All evaluator implementations
+
+**Phase 3: Evaluation Runner** - Complete
+- Async execution with configurable concurrency
+- Progress tracking and WebSocket event emission
+- Sampling support with optional seed
+- Retry mechanism for failed examples
+- Comprehensive metrics calculation including run metadata aggregates
+
+**Phase 3 Files**:
+- `backend/app/services/evaluation_runner.py` - Orchestration service
+
+**Phase 4: REST API Endpoints** - Complete
+- Full CRUD for datasets, examples, evaluators, runs, results
+- Batch operations for examples (create, delete)
+- Import/export for datasets (CSV, JSON)
+- Evaluator testing endpoint
+- Run comparison endpoint
+- Background task execution
+
+**API Endpoints**:
+- `POST/GET /api/v1/evaluations/datasets` - Dataset CRUD
+- `POST/GET/PUT/DELETE /api/v1/evaluations/datasets/{id}` - Dataset operations
+- `POST/GET /api/v1/evaluations/datasets/{id}/examples` - Example operations
+- `POST /api/v1/evaluations/datasets/{id}/import` - Import CSV/JSON
+- `POST /api/v1/evaluations/datasets/{id}/export` - Export CSV/JSON
+- `GET/POST /api/v1/evaluations/evaluators` - Evaluator CRUD
+- `POST /api/v1/evaluations/evaluators/{id}/clone` - Clone evaluator
+- `POST /api/v1/evaluations/evaluators/{id}/test` - Test evaluator
+- `POST/GET /api/v1/evaluations/runs` - Run CRUD
+- `POST /api/v1/evaluations/runs/{id}/execute` - Start evaluation
+- `POST /api/v1/evaluations/runs/{id}/cancel` - Cancel evaluation
+- `GET /api/v1/evaluations/runs/{id}/results` - List results
+- `GET /api/v1/evaluations/runs/compare` - Compare runs
+
+**Phase 4 Files**:
+- `backend/app/api/v1/evaluations.py` - All API endpoints
+- `backend/app/main.py` - Router registration, evaluator seeding
+
+**Evaluator Seeding**: 17 built-in evaluators automatically seeded on startup
+
+**Reference**: `EVALUATIONS_SPEC.md`
+
+---
 
 ### Sessions Page UX Improvements
 
@@ -338,7 +461,7 @@ DeepAgentStudio is a comprehensive web application for building, managing, and i
 
 ## Current Application Inventory
 
-### Database Schema (23 Tables)
+### Database Schema (30 Tables)
 
 ```
 users (5 columns)
@@ -356,15 +479,22 @@ users (5 columns)
 ├── sessions (15 columns)
 │   ├── messages (8 columns + content_blocks JSONB)
 │   ├── trace_steps (10 columns) - legacy, being replaced by spans
-│   ├── spans (25 columns) - NEW: hierarchical tracing
+│   ├── spans (25 columns) - hierarchical tracing
 │   ├── session_workspaces (7 columns)
 │   ├── session_tasks (9 columns)
 │   ├── session_scratchpads (5 columns)
 │   └── session_media_files (10 columns) - multimodal output storage
+├── evaluation_datasets (12 columns) - NEW: test datasets
+│   └── dataset_examples (10 columns) - NEW: input/output pairs
+├── evaluators (10 columns) - NEW: evaluation criteria
+├── evaluation_runs (14 columns) - NEW: test executions
+│   ├── evaluation_run_evaluators (association table) - NEW
+│   └── evaluation_results (14 columns) - NEW: per-example results
+│       └── evaluation_scores (8 columns) - NEW: per-evaluator scores
 └── search_provider_configs (7 columns)
 ```
 
-**Migrations**: 14 Alembic migrations applied
+**Migrations**: 15 Alembic migrations applied (including 2 evaluation system migrations)
 
 ### Built-in Tools (12 Total)
 
@@ -397,7 +527,7 @@ users (5 columns)
 | Plan-and-Execute | plan_and_execute | Planning before execution |
 | Conversational | conversational | Simple chat without tools |
 
-### Frontend Pages (16 Total)
+### Frontend Pages (20 Total)
 
 | Page | Description |
 |------|-------------|
@@ -417,20 +547,25 @@ users (5 columns)
 | SettingsPage | LLM provider configuration |
 | LoginPage | User authentication |
 | RegisterPage | User registration |
+| EvaluationsPage | Tabbed view of datasets, evaluators, and runs |
+| DatasetEditorPage | Dataset metadata and examples editor |
+| EvaluatorEditorPage | Evaluator configuration with type-specific forms |
+| RunDetailPage | Evaluation run results and metrics |
 
-### API Endpoints (81+ Total)
+### API Endpoints (105+ Total)
 
 | Router | Endpoints | Description |
 |--------|-----------|-------------|
 | `/api/v1/auth` | 4 | Register, login, token refresh, me |
-| `/api/v1/agents` | 13 | CRUD, versions, rollback, tools, MCP, invoke, **clone** |
+| `/api/v1/agents` | 13 | CRUD, versions, rollback, tools, MCP, invoke, clone |
 | `/api/v1/agent-types` | 9 | CRUD, clone, recommended tools |
 | `/api/v1/tools` | 8 | CRUD, schema generation |
 | `/api/v1/prompts` | 10 | CRUD, versions, rollback, preview |
-| `/api/v1/sessions` | 14 | CRUD, messages, traces, statistics, **backfill-costs** |
-| `/api/v1/sessions/.../spans` | 5 | List, tree, stats, traces, detail - **NEW** |
+| `/api/v1/sessions` | 14 | CRUD, messages, traces, statistics, backfill-costs |
+| `/api/v1/sessions/.../spans` | 5 | List, tree, stats, traces, detail |
 | `/api/v1/llm-providers` | 8 | CRUD, test connection |
 | `/api/v1/mcp-servers` | 7 | CRUD, test connection, discover tools |
+| `/api/v1/evaluations` | 24 | **NEW** Datasets, evaluators, runs, results, comparison |
 | `/api/v1/ws` | 1 | WebSocket agent streaming |
 
 ---
@@ -518,17 +653,18 @@ users (5 columns)
 
 | Metric | Count |
 |--------|-------|
-| Backend Python Files | ~50 |
-| Frontend TypeScript Files | ~95 |
+| Backend Python Files | ~55 |
+| Frontend TypeScript Files | ~100 |
 | SQLAlchemy Models | 17 |
-| Database Tables | 23 |
-| API Routers | 10 |
-| Frontend Pages | 16 |
-| UI Components | 20+ (shadcn/ui) |
+| Database Tables | 30 |
+| API Routers | 11 |
+| Frontend Pages | 20 |
+| UI Components | 25+ (shadcn/ui) |
 | Built-in Tools | 12 |
 | Built-in Agents | 1 |
 | Built-in Agent Types | 3 |
-| Test Files | 20 (backend) + 19 (frontend) |
+| Built-in Evaluators | 17 |
+| Test Files | 33 (backend) + 19 (frontend) |
 
 ---
 
@@ -619,11 +755,12 @@ docker-compose up -d --build
 | `FRONTEND-SPEC.md` | Frontend implementation spec |
 | `ADVANCED_AGENT_TOOLKIT_SPEC.md` | Workspace tools for autonomous agents |
 | `ENHANCED_TRACING_SPEC.md` | Hierarchical tracing system specification |
+| `EVALUATIONS_SPEC.md` | Evaluation system specification |
 | `README.md` | Project overview & quick start |
 | `TESTING.md` | Testing guide |
 
 ---
 
-**Last Test Run**: 2026-01-08
+**Last Test Run**: 2026-01-09
 **Build Status**: Healthy (all containers running)
-**Database Status**: 14 migrations applied
+**Database Status**: 15 migrations applied
