@@ -1,4 +1,4 @@
-import { Menu, Moon, Sun, LogOut, User, Settings } from 'lucide-react';
+import { Menu, Moon, Sun, Monitor, LogOut, User, Settings } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useUIStore } from '@/stores/uiStore';
 import {
@@ -11,6 +11,10 @@ import {
   DropdownMenuTrigger,
   Avatar,
   AvatarFallback,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from '@/components/ui';
 import { Link } from 'react-router-dom';
 
@@ -31,7 +35,13 @@ export function Header() {
   const getThemeIcon = () => {
     if (theme === 'dark') return <Moon className="h-5 w-5" />;
     if (theme === 'light') return <Sun className="h-5 w-5" />;
-    return <Sun className="h-5 w-5" />;
+    return <Monitor className="h-5 w-5" />;
+  };
+
+  const getThemeLabel = () => {
+    if (theme === 'dark') return 'Dark';
+    if (theme === 'light') return 'Light';
+    return 'System';
   };
 
   const getUserInitials = () => {
@@ -54,14 +64,23 @@ export function Header() {
 
         <div className="flex-1" />
 
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleTheme}
-          aria-label="Toggle theme"
-        >
-          {getThemeIcon()}
-        </Button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleTheme}
+                aria-label="Toggle theme"
+              >
+                {getThemeIcon()}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Theme: {getThemeLabel()}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
