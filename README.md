@@ -398,8 +398,6 @@ Key configuration (see `backend/.env.example`):
 |----------|-------------|
 | [STATUS.md](./STATUS.md) | Development status and progress |
 | [SECURITY.md](./SECURITY.md) | Security considerations and deployment guide |
-| [ENHANCED_TRACING_SPEC.md](./ENHANCED_TRACING_SPEC.md) | Hierarchical tracing system specification |
-| [EVALUATIONS_SPEC.md](./EVALUATIONS_SPEC.md) | Evaluation system specification |
 | [CLAUDE.md](./CLAUDE.md) | AI assistant guidelines and project conventions |
 | [backend/docs/LLM_PROVIDER_INTEGRATION.md](./backend/docs/LLM_PROVIDER_INTEGRATION.md) | LLM provider integration guide |
 
