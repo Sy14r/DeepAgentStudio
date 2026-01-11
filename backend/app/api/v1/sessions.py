@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import func, and_
 from typing import List, Optional
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from ...database import get_db
 from ...services.media_storage import get_media_storage_service
@@ -689,11 +690,14 @@ def get_session_media(
         )
 
     # Return file with appropriate headers
+    # Use RFC 5987 encoding for filename to handle special characters safely
+    filename = file_path.split('/')[-1]
+    encoded_filename = quote(filename, safe='')
     return Response(
         content=content,
         media_type=mime_type,
         headers={
-            "Content-Disposition": f"inline; filename=\"{file_path.split('/')[-1]}\"",
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}",
             "Cache-Control": "max-age=3600"  # Cache for 1 hour
         }
     )

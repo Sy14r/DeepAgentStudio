@@ -25,6 +25,26 @@ from ..encryption import decrypt_api_key
 logger = logging.getLogger(__name__)
 
 
+# Whitelist of allowed commands for MCP stdio transport
+# This prevents arbitrary command execution via MCP server configuration
+# Common MCP servers use npx (Node.js) or uvx (Python) package runners
+ALLOWED_MCP_COMMANDS = frozenset({
+    # Package runners (most common for MCP servers)
+    "npx",          # Node.js package runner (npm)
+    "uvx",          # Python package runner (uv)
+    "pipx",         # Python package runner (pipx)
+
+    # Direct interpreters (for local development)
+    "node",         # Node.js runtime
+    "python",       # Python interpreter
+    "python3",      # Python 3 interpreter
+
+    # Container execution (for isolated servers)
+    "docker",       # Docker container execution
+    "podman",       # Podman container execution
+})
+
+
 @dataclass
 class MCPConnection:
     """Represents an active MCP connection with session and transport info."""
@@ -133,6 +153,16 @@ class MCPClientService:
 
         if not command:
             raise MCPConnectionError("stdio transport requires 'command' in stdio_config")
+
+        # Security: Validate command against whitelist to prevent arbitrary command execution
+        # Extract base command (handle paths like /usr/bin/npx)
+        base_command = command.split("/")[-1] if "/" in command else command
+        if base_command not in ALLOWED_MCP_COMMANDS:
+            allowed_list = ", ".join(sorted(ALLOWED_MCP_COMMANDS))
+            raise MCPConnectionError(
+                f"Command '{command}' is not allowed for MCP servers. "
+                f"Allowed commands: {allowed_list}"
+            )
 
         env_vars = self._get_env_vars()
 

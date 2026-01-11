@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-DeepAgentStudio is a comprehensive web application for building, managing, and interacting with LangChain deepagents. This document tracks implementation progress against the specification defined in `SPEC.md`.
+DeepAgentStudio is a comprehensive web application for building, managing, and interacting with LangChain deepagents. This document tracks implementation progress.
 
 ### Overall Progress
 
@@ -751,13 +751,12 @@ docker-compose up -d --build
 
 | Document | Description |
 |----------|-------------|
-| `SPEC.md` | Product specification |
-| `FRONTEND-SPEC.md` | Frontend implementation spec |
-| `ADVANCED_AGENT_TOOLKIT_SPEC.md` | Workspace tools for autonomous agents |
+| `README.md` | Project overview & quick start |
+| `STATUS.md` | Development status and progress |
 | `ENHANCED_TRACING_SPEC.md` | Hierarchical tracing system specification |
 | `EVALUATIONS_SPEC.md` | Evaluation system specification |
-| `README.md` | Project overview & quick start |
-| `TESTING.md` | Testing guide |
+| `CLAUDE.md` | AI assistant guidelines and project conventions |
+| `backend/docs/LLM_PROVIDER_INTEGRATION.md` | LLM provider integration guide |
 
 ---
 

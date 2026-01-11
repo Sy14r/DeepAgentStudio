@@ -294,17 +294,11 @@ def seed_builtin_agents(db: Session) -> None:
     db.add(agent)
     db.flush()
 
-    # Create initial version
-    # Note: created_by is required, we use 0 or create a system user
-    # For simplicity, we'll need to handle this - let's check if there's a user
-    from ..models.user import User
-    system_user = db.query(User).first()
-    created_by_id = system_user.id if system_user else 1
-
+    # Create initial version (created_by is NULL for built-in agents)
     version = AgentVersion(
         agent_id=agent.id,
         version_number=1,
-        created_by=created_by_id,
+        created_by=None,  # Built-in agents have no creator
         config={
             "llm_config": POWER_AGENT_LLM_CONFIG,
             "tool_ids": tool_ids,

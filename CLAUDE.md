@@ -100,6 +100,13 @@ frontend/
 - `WorkspaceService`: Manages agent file workspaces (sandboxed per session)
 - `SpanService`: Captures hierarchical execution traces via LangChain callbacks
 
+### Evaluation System
+
+- **LLM-based evaluators** (`llm_judge`, `semantic_similarity`) require an LLM provider
+- Provider is specified via `llm_provider_id` when creating an evaluation run
+- `LLM_EVALUATOR_TYPES` constant in `frontend/src/api/types.ts` defines which evaluator types need an LLM provider
+- Evaluator sessions are filtered from sidebar, sessions list, and dashboard (via `meta->>'type' = 'evaluator_session'`)
+
 ### Frontend Page Organization
 
 - **Editors**: Full-page editors for agents, tools, prompts, datasets, evaluators (Monaco code editor)

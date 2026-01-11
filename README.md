@@ -80,13 +80,18 @@ Update the `ENCRYPTION_KEY` in `docker-compose.yml` or create a `.env` file.
 docker-compose up -d
 ```
 
-### 4. Run Database Migrations
+The backend will automatically:
+- Wait for PostgreSQL to be ready
+- Run database migrations
+- Seed built-in tools and agents
+- Start the API server
 
+You can monitor startup progress with:
 ```bash
-docker-compose exec backend alembic upgrade head
+docker-compose logs -f backend
 ```
 
-### 5. Access the Application
+### 4. Access the Application
 
 | Service | URL |
 |---------|-----|
@@ -95,7 +100,7 @@ docker-compose exec backend alembic upgrade head
 | API Docs (Swagger) | http://localhost:8000/docs |
 | API Docs (ReDoc) | http://localhost:8000/redoc |
 
-### 6. Create an Account
+### 5. Create an Account
 
 Register via the UI at http://localhost:5173 or via API:
 
@@ -111,7 +116,7 @@ curl -X POST "http://localhost:8000/api/v1/auth/register" \
 
 > **Note**: Passwords must be at least 12 characters long.
 
-### 7. Start Using the Power Agent
+### 6. Start Using the Power Agent
 
 Once logged in, the **Power Agent** is immediately available:
 - Navigate to **Agents** page
@@ -259,8 +264,8 @@ DeepAgentStudio/
 │   │   └── stores/        # Zustand stores (incl. spanStore.ts)
 │   └── tests/             # Vitest test files
 ├── docker-compose.yml
-├── SPEC.md                # Product specification
 ├── STATUS.md              # Development status
+├── CLAUDE.md              # AI assistant guidelines
 └── README.md              # This file
 ```
 
@@ -279,10 +284,9 @@ docker-compose exec -T backend pytest --cov=app --cov-report=html
 
 ### Database Operations
 
-```bash
-# Apply migrations
-docker-compose exec backend alembic upgrade head
+Migrations run automatically on backend startup. For manual operations:
 
+```bash
 # Create new migration
 docker-compose exec backend alembic revision --autogenerate -m "description"
 
@@ -392,13 +396,12 @@ Key configuration (see `backend/.env.example`):
 
 | Document | Description |
 |----------|-------------|
-| [SPEC.md](./SPEC.md) | Full product specification |
 | [STATUS.md](./STATUS.md) | Development status and progress |
-| [FRONTEND-SPEC.md](./FRONTEND-SPEC.md) | Frontend implementation details |
-| [TESTING.md](./TESTING.md) | Testing guide |
-| [ADVANCED_AGENT_TOOLKIT_SPEC.md](./ADVANCED_AGENT_TOOLKIT_SPEC.md) | Workspace tools specification |
+| [SECURITY.md](./SECURITY.md) | Security considerations and deployment guide |
 | [ENHANCED_TRACING_SPEC.md](./ENHANCED_TRACING_SPEC.md) | Hierarchical tracing system specification |
 | [EVALUATIONS_SPEC.md](./EVALUATIONS_SPEC.md) | Evaluation system specification |
+| [CLAUDE.md](./CLAUDE.md) | AI assistant guidelines and project conventions |
+| [backend/docs/LLM_PROVIDER_INTEGRATION.md](./backend/docs/LLM_PROVIDER_INTEGRATION.md) | LLM provider integration guide |
 
 ## License
 
