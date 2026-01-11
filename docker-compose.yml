@@ -49,7 +49,7 @@ services:
       WORKSPACE_BASE_PATH: /var/lib/deepagent/workspaces
       WORKSPACE_MAX_SIZE_MB: 100
       WORKSPACE_FILE_MAX_SIZE_MB: 10
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: /app/entrypoint.sh
     networks:
       - deepagent_network
 

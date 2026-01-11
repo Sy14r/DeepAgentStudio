@@ -6,8 +6,24 @@ Currently implements a no-op passthrough, but designed for easy
 replacement with actual sandboxing (Docker, RestrictedPython, etc.)
 in the future.
 
-Security Note: Custom tool code is currently executed without sandboxing.
-In production, implement proper sandboxing before allowing untrusted code.
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                           SECURITY WARNING                                    ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Custom tool code is executed WITHOUT sandboxing by default.                  ║
+║                                                                              ║
+║  This means custom Python tools have FULL ACCESS to:                         ║
+║    - File system (read/write any files)                                      ║
+║    - Network (make HTTP requests, open sockets)                              ║
+║    - Environment variables (including secrets)                               ║
+║    - System resources                                                        ║
+║                                                                              ║
+║  ONLY deploy DeepAgentStudio with untrusted users if you:                    ║
+║    1. Disable custom tool creation (use built-in tools only)                 ║
+║    2. Implement proper sandboxing (Docker, gVisor, etc.)                     ║
+║    3. Run in a fully isolated environment                                    ║
+║                                                                              ║
+║  For self-hosted deployments with trusted users, this is acceptable.         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 """
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
@@ -71,9 +87,25 @@ class NoOpSandbox(BaseSandbox):
     """
     No-op sandbox that executes code directly.
 
-    WARNING: This provides NO security isolation.
-    Only use in development or with fully trusted code.
+    ⚠️  SECURITY WARNING: This provides NO security isolation.  ⚠️
+
+    Code executed through this sandbox has:
+    - Full file system access
+    - Full network access
+    - Access to all environment variables
+    - Access to import any Python module
+    - No memory or CPU limits
+    - No timeout enforcement at the sandbox level
+
+    Only use in:
+    - Development environments
+    - Self-hosted deployments with fully trusted users
+    - Deployments where custom tools are disabled
+
+    For untrusted code, implement DockerSandbox or similar.
     """
+
+    _warning_logged = False
 
     def execute(
         self,
@@ -87,6 +119,14 @@ class NoOpSandbox(BaseSandbox):
         Creates a local namespace with inputs and executes the code.
         The result should be stored in a 'result' variable.
         """
+        # Log warning on first execution
+        if not NoOpSandbox._warning_logged:
+            logger.warning(
+                "⚠️  NoOpSandbox: Custom tool code is executing WITHOUT sandboxing. "
+                "This is only safe for trusted users. See SECURITY.md for details."
+            )
+            NoOpSandbox._warning_logged = True
+
         import time
         start_time = time.time()
 
