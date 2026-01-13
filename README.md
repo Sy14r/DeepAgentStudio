@@ -16,7 +16,7 @@ DeepAgentStudio provides developers and AI/ML engineers with a complete platform
 - **Session Recording**: Complete conversation history, execution traces, and performance metrics
 - **Trace Explorer**: Full-page hierarchical trace visualization with filtering, search, and export (LangSmith/Langfuse-style)
 - **Evaluation System**: Test agents against datasets with 17 built-in evaluators (output matching, LLM judge, run metadata analysis)
-- **LLM Provider Integration**: Support for OpenAI, Anthropic, Google, Azure OpenAI, Ollama, and LlamaCPP
+- **LLM Provider Integration**: Support for OpenAI, Anthropic, (Google, Azure OpenAI, Ollama, and LlamaCPP coming soon)
 
 ## Current Status
 
