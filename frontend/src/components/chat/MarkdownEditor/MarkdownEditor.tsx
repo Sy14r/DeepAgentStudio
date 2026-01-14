@@ -66,18 +66,76 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
           ),
         },
         handleKeyDown: (view, event) => {
-          // Enter without shift sends the message
-          if (event.key === 'Enter' && !event.shiftKey) {
+          // Ctrl+Enter (or Cmd+Enter on Mac) sends the message
+          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
             onSubmit?.();
             return true;
           }
 
-          // Handle Shift+Enter for smart block behavior
-          if (event.key === 'Enter' && event.shiftKey) {
+          // Regular Enter for smart block behavior
+          if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {
             const { state } = view;
             const { selection } = state;
             const { $from } = selection;
+            const currentLineText = $from.parent.textContent;
+            const isCurrentBlockEmpty = currentLineText.length === 0;
+
+            // Check if we're in a code block
+            const isInCodeBlock = $from.parent.type.name === 'codeBlock';
+            if (isInCodeBlock) {
+              // Get text from start of code block to cursor position
+              const textBeforeCursor = $from.parent.textBetween(0, $from.parentOffset);
+              const textAfterCursor = $from.parent.textBetween($from.parentOffset, $from.parent.content.size);
+
+              // Check if we're on an empty line:
+              // - Text before cursor ends with newline (we just added a blank line)
+              // - Text after cursor starts with newline or is empty (nothing on this line after cursor)
+              const atEmptyLineStart = textBeforeCursor.endsWith('\n');
+              const atLineEnd = textAfterCursor.length === 0 || textAfterCursor.startsWith('\n');
+              const isOnEmptyLine = atEmptyLineStart && atLineEnd;
+
+              if (isOnEmptyLine) {
+                event.preventDefault();
+                // Exit code block: remove trailing newline and create paragraph after
+                const tr = state.tr;
+
+                // Remove the trailing empty line from the code block
+                const deleteFrom = $from.pos - 1;
+                tr.delete(deleteFrom, $from.pos);
+
+                // Insert a paragraph after the code block
+                const blockEnd = tr.doc.resolve(tr.mapping.map($from.pos)).end();
+                tr.insert(blockEnd + 1, state.schema.nodes.paragraph.create());
+                // Move cursor to the new paragraph
+                tr.setSelection(state.selection.constructor.near(tr.doc.resolve(blockEnd + 2)));
+                view.dispatch(tr);
+                return true;
+              }
+
+              // Inside code block with content on line: insert a newline
+              event.preventDefault();
+              view.dispatch(state.tr.insertText('\n'));
+              return true;
+            }
+
+            // Check if current line is a code fence (``` or ```language) - create code block
+            if (/^`{3}/.test(currentLineText.trim())) {
+              event.preventDefault();
+              const language = currentLineText.trim().slice(3).trim() || null;
+              const tr = state.tr;
+              // Replace current paragraph with a code block
+              const blockStart = $from.start() - 1;
+              const blockEnd = $from.end() + 1;
+              const codeBlock = state.schema.nodes.codeBlock.create(
+                language ? { language } : null
+              );
+              tr.replaceWith(blockStart, blockEnd, codeBlock);
+              // Position cursor inside the code block
+              tr.setSelection(state.selection.constructor.near(tr.doc.resolve(blockStart + 1)));
+              view.dispatch(tr);
+              return true;
+            }
 
             // Check if we're in a heading - always exit to paragraph
             const isInHeading = $from.parent.type.name === 'heading';
@@ -105,9 +163,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                                   $from.node(-1)?.type.name === 'listItem';
             const isInBlockquote = $from.node(-1)?.type.name === 'blockquote' ||
                                     $from.node(-2)?.type.name === 'blockquote';
-
-            // Check if current block is empty (for double-enter escape)
-            const isCurrentBlockEmpty = $from.parent.textContent.length === 0;
 
             if ((isInListItem || isInBlockquote) && isCurrentBlockEmpty) {
               event.preventDefault();

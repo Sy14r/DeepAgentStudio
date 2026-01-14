@@ -135,7 +135,7 @@ export function MarkdownToolbar({ editor, size = 'default', disabled = false }: 
   return (
     <div
       className={cn(
-        'flex items-center gap-0.5 border-b border-input px-1',
+        'flex items-center gap-0.5 px-2',
         isCompact ? 'py-0.5' : 'py-1'
       )}
     >

@@ -63,7 +63,7 @@ export function ChatInputWithAttachments({
   value,
   onChange,
   onSend,
-  placeholder = 'Type your message... (Shift+Enter for new line)',
+  placeholder = 'Type your message... (Ctrl+Enter to send)',
   disabled = false,
   isLoading = false,
   maxHeight = 200,
@@ -250,8 +250,8 @@ export function ChatInputWithAttachments({
 
       {/* Action Bar */}
       <div className={cn(
-        'flex items-center justify-between border-t border-input',
-        isCompact ? 'px-1 py-1' : 'px-2 py-1.5'
+        'flex items-center justify-between',
+        isCompact ? 'px-1 py-1' : 'px-2 py-1'
       )}>
         {/* Left: Attachment button */}
         <TooltipProvider>
