@@ -1,12 +1,6 @@
 /* Markdown Editor Container */
 .markdown-editor-wrapper {
-  @apply w-full rounded-md border border-input bg-background;
-  @apply ring-offset-background;
-  @apply focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2;
-}
-
-.markdown-editor-wrapper:has(.markdown-editor[class*="cursor-not-allowed"]) {
-  @apply opacity-50 cursor-not-allowed;
+  @apply w-full bg-background;
 }
 
 /* Editor Content Area */
@@ -16,6 +10,32 @@
 
 .markdown-editor .ProseMirror {
   @apply outline-none min-h-[20px];
+}
+
+/* Custom Scrollbar */
+.markdown-editor::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.markdown-editor::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.markdown-editor::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/30 rounded-full;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.markdown-editor::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/50;
+}
+
+/* Firefox scrollbar */
+.markdown-editor {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
 }
 
 /* Placeholder */
