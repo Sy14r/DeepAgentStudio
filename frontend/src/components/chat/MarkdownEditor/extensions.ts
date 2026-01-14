@@ -1,7 +1,13 @@
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { Markdown } from 'tiptap-markdown';
+import { common, createLowlight } from 'lowlight';
+
+// Create lowlight instance with common languages
+// Includes: javascript, typescript, python, css, html, json, bash, sql, etc.
+const lowlight = createLowlight(common);
 
 export const createExtensions = (placeholder: string) => [
   StarterKit.configure({
@@ -9,14 +15,17 @@ export const createExtensions = (placeholder: string) => [
     heading: {
       levels: [1, 2, 3],
     },
-    // Code block with language support
-    codeBlock: {
-      HTMLAttributes: {
-        class: 'bg-muted rounded p-3 font-mono text-sm',
-      },
-    },
+    // Disable default codeBlock - we use CodeBlockLowlight instead
+    codeBlock: false,
     // Enable horizontal rule for --- syntax
     horizontalRule: {},
+  }),
+  CodeBlockLowlight.configure({
+    lowlight,
+    defaultLanguage: 'plaintext',
+    HTMLAttributes: {
+      class: 'bg-muted rounded p-3 font-mono text-sm overflow-x-auto',
+    },
   }),
   Link.configure({
     openOnClick: false,
