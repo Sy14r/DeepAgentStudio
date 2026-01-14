@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
-import { liftListItem } from '@tiptap/pm/schema-list';
+import { liftListItem, splitListItem } from '@tiptap/pm/schema-list';
 import { lift } from '@tiptap/pm/commands';
 import { cn } from '@/lib/utils';
 import { createExtensions } from './extensions';
@@ -158,36 +158,77 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
               return true;
             }
 
-            // Check if we're in a list item or blockquote
-            const isInListItem = $from.parent.type.name === 'listItem' ||
-                                  $from.node(-1)?.type.name === 'listItem';
+            // Check if we're in a list item
+            const isInListItem = $from.node(-1)?.type.name === 'listItem';
+            const listItemType = state.schema.nodes.listItem;
+
+            if (isInListItem && listItemType) {
+              if (event.shiftKey) {
+                // Shift+Enter in list: multi-line within current item
+                // Get text within the paragraph inside the list item
+                const textBeforeCursor = $from.parent.textBetween(0, $from.parentOffset);
+                const textAfterCursor = $from.parent.textBetween($from.parentOffset, $from.parent.content.size);
+                const atEmptyLineStart = textBeforeCursor.endsWith('\n');
+                const atLineEnd = textAfterCursor.length === 0 || textAfterCursor.startsWith('\n');
+                const isOnEmptyLine = atEmptyLineStart && atLineEnd;
+
+                if (isOnEmptyLine) {
+                  // Double Shift+Enter on empty line: exit list
+                  event.preventDefault();
+                  // Remove the trailing newline
+                  const tr = state.tr;
+                  tr.delete($from.pos - 1, $from.pos);
+                  view.dispatch(tr);
+                  // Then lift out of list
+                  liftListItem(listItemType)(view.state, view.dispatch);
+                  return true;
+                }
+
+                // Insert newline within the list item (multi-line)
+                event.preventDefault();
+                view.dispatch(state.tr.insertText('\n'));
+                return true;
+              } else {
+                // Regular Enter in list: new item or exit on empty
+                if (isCurrentBlockEmpty) {
+                  // Enter on empty list item: exit list
+                  event.preventDefault();
+                  liftListItem(listItemType)(state, view.dispatch);
+                  return true;
+                }
+
+                // Create new list item
+                event.preventDefault();
+                splitListItem(listItemType)(state, view.dispatch);
+                return true;
+              }
+            }
+
+            // Check if we're in a blockquote
             const isInBlockquote = $from.node(-1)?.type.name === 'blockquote' ||
                                     $from.node(-2)?.type.name === 'blockquote';
 
-            if ((isInListItem || isInBlockquote) && isCurrentBlockEmpty) {
-              event.preventDefault();
-              // Exit the list/blockquote and create a new paragraph
-              if (isInListItem) {
-                // Lift out of list
-                const listItemType = state.schema.nodes.listItem;
-                if (listItemType && liftListItem(listItemType)(state, view.dispatch)) {
-                  return true;
-                }
-              }
-              if (isInBlockquote) {
-                // Exit blockquote by lifting
+            if (isInBlockquote) {
+              if (isCurrentBlockEmpty) {
+                // Enter/Shift+Enter on empty line in blockquote: exit
+                event.preventDefault();
                 if (lift(state, view.dispatch)) {
                   return true;
                 }
+                return true;
               }
+
+              // Non-empty: split to create new paragraph within blockquote
+              event.preventDefault();
+              const tr = state.tr.split($from.pos);
+              view.dispatch(tr);
               return true;
             }
 
-            // For regular paragraphs and non-empty list items/blockquotes,
-            // split to create a new block (instead of inserting hard break)
+            // For regular paragraphs, split to create a new block
             // This allows markdown input rules to trigger on the new line
             const isInParagraph = $from.parent.type.name === 'paragraph';
-            if (isInParagraph || isInListItem || isInBlockquote) {
+            if (isInParagraph) {
               event.preventDefault();
               const tr = state.tr.split($from.pos);
               view.dispatch(tr);
