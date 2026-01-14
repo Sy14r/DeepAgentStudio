@@ -1,0 +1,261 @@
+import { useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useEditor, EditorContent, Editor } from '@tiptap/react';
+import { liftListItem } from '@tiptap/pm/schema-list';
+import { lift } from '@tiptap/pm/commands';
+import { cn } from '@/lib/utils';
+import { createExtensions } from './extensions';
+import { MarkdownToolbar } from './MarkdownToolbar';
+import './styles.css';
+
+// Helper to get markdown from editor storage
+// tiptap-markdown adds a getMarkdown method to the storage
+const getMarkdownFromEditor = (editor: Editor): string => {
+  const storage = editor.storage as unknown as Record<string, { getMarkdown?: () => string }>;
+  return storage.markdown?.getMarkdown?.() || editor.getText();
+};
+
+export interface MarkdownEditorRef {
+  focus: () => void;
+  getMarkdown: () => string;
+  clear: () => void;
+  editor: Editor | null;
+}
+
+interface MarkdownEditorProps {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit?: () => void;
+  placeholder?: string;
+  disabled?: boolean;
+  minHeight?: number;
+  maxHeight?: number;
+  size?: 'default' | 'compact';
+  showToolbar?: boolean;
+  className?: string;
+}
+
+export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>(
+  (
+    {
+      value,
+      onChange,
+      onSubmit,
+      placeholder = 'Type your message...',
+      disabled = false,
+      minHeight = 44,
+      maxHeight = 200,
+      size = 'default',
+      showToolbar = true,
+      className,
+    },
+    ref
+  ) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const isInternalUpdate = useRef(false);
+    const isCompact = size === 'compact';
+
+    const editor = useEditor({
+      extensions: createExtensions(placeholder),
+      content: value || '',
+      editable: !disabled,
+      editorProps: {
+        attributes: {
+          class: cn(
+            'markdown-editor-content outline-none',
+            isCompact ? 'text-sm' : 'text-base'
+          ),
+        },
+        handleKeyDown: (view, event) => {
+          // Enter without shift sends the message
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            onSubmit?.();
+            return true;
+          }
+
+          // Handle Shift+Enter for smart block behavior
+          if (event.key === 'Enter' && event.shiftKey) {
+            const { state } = view;
+            const { selection } = state;
+            const { $from } = selection;
+
+            // Check if we're in a heading - always exit to paragraph
+            const isInHeading = $from.parent.type.name === 'heading';
+            if (isInHeading) {
+              event.preventDefault();
+
+              // Split the heading first
+              const tr = state.tr.split($from.pos);
+
+              // After split, map the position to find where cursor is in new doc
+              const newCursorPos = tr.mapping.map($from.pos);
+              const $newCursor = tr.doc.resolve(newCursorPos);
+
+              // Get the boundaries of the new block and convert to paragraph
+              const blockStart = $newCursor.start();
+              const blockEnd = $newCursor.end();
+              tr.setBlockType(blockStart, blockEnd, state.schema.nodes.paragraph);
+
+              view.dispatch(tr);
+              return true;
+            }
+
+            // Check if we're in a list item or blockquote
+            const isInListItem = $from.parent.type.name === 'listItem' ||
+                                  $from.node(-1)?.type.name === 'listItem';
+            const isInBlockquote = $from.node(-1)?.type.name === 'blockquote' ||
+                                    $from.node(-2)?.type.name === 'blockquote';
+
+            // Check if current block is empty (for double-enter escape)
+            const isCurrentBlockEmpty = $from.parent.textContent.length === 0;
+
+            if ((isInListItem || isInBlockquote) && isCurrentBlockEmpty) {
+              event.preventDefault();
+              // Exit the list/blockquote and create a new paragraph
+              if (isInListItem) {
+                // Lift out of list
+                const listItemType = state.schema.nodes.listItem;
+                if (listItemType && liftListItem(listItemType)(state, view.dispatch)) {
+                  return true;
+                }
+              }
+              if (isInBlockquote) {
+                // Exit blockquote by lifting
+                if (lift(state, view.dispatch)) {
+                  return true;
+                }
+              }
+              return true;
+            }
+
+            // For regular paragraphs and non-empty list items/blockquotes,
+            // split to create a new block (instead of inserting hard break)
+            // This allows markdown input rules to trigger on the new line
+            const isInParagraph = $from.parent.type.name === 'paragraph';
+            if (isInParagraph || isInListItem || isInBlockquote) {
+              event.preventDefault();
+              const tr = state.tr.split($from.pos);
+              view.dispatch(tr);
+              return true;
+            }
+          }
+
+          return false;
+        },
+      },
+      onUpdate: ({ editor }) => {
+        isInternalUpdate.current = true;
+        const markdown = getMarkdownFromEditor(editor);
+        onChange(markdown);
+        // Reset flag after a tick
+        setTimeout(() => {
+          isInternalUpdate.current = false;
+        }, 0);
+      },
+    });
+
+    // Sync external value changes
+    useEffect(() => {
+      if (!editor || isInternalUpdate.current) return;
+
+      const currentMarkdown = getMarkdownFromEditor(editor);
+      if (value !== currentMarkdown) {
+        // Preserve cursor position when possible
+        const { from, to } = editor.state.selection;
+        editor.commands.setContent(value || '');
+        // Try to restore selection if still valid
+        try {
+          const maxPos = editor.state.doc.content.size;
+          if (from <= maxPos && to <= maxPos) {
+            editor.commands.setTextSelection({ from, to });
+          }
+        } catch {
+          // Selection restoration failed, that's okay
+        }
+      }
+    }, [value, editor]);
+
+    // Update editable state
+    useEffect(() => {
+      if (editor) {
+        editor.setEditable(!disabled);
+      }
+    }, [disabled, editor]);
+
+    // Update placeholder dynamically
+    useEffect(() => {
+      if (editor) {
+        const placeholderExtension = editor.extensionManager.extensions.find(
+          (ext) => ext.name === 'placeholder'
+        );
+        if (placeholderExtension) {
+          placeholderExtension.options.placeholder = placeholder;
+          // Force re-render of placeholder
+          editor.view.dispatch(editor.state.tr);
+        }
+      }
+    }, [placeholder, editor]);
+
+    // Auto-resize editor
+    useEffect(() => {
+      if (!editor || !containerRef.current) return;
+
+      const updateHeight = () => {
+        const editorElement = containerRef.current?.querySelector('.ProseMirror');
+        if (editorElement) {
+          const scrollHeight = (editorElement as HTMLElement).scrollHeight;
+          const newHeight = Math.max(minHeight, Math.min(scrollHeight + 2, maxHeight));
+          if (containerRef.current) {
+            containerRef.current.style.height = `${newHeight}px`;
+          }
+        }
+      };
+
+      // Update height on content changes
+      editor.on('update', updateHeight);
+      updateHeight();
+
+      return () => {
+        editor.off('update', updateHeight);
+      };
+    }, [editor, minHeight, maxHeight]);
+
+    // Expose methods via ref
+    useImperativeHandle(ref, () => ({
+      focus: () => editor?.commands.focus(),
+      getMarkdown: () => (editor ? getMarkdownFromEditor(editor) : ''),
+      clear: () => editor?.commands.clearContent(),
+      editor,
+    }));
+
+    const handleFocus = useCallback(() => {
+      editor?.commands.focus();
+    }, [editor]);
+
+    return (
+      <div className={cn('markdown-editor-wrapper', className)}>
+        {showToolbar && editor && (
+          <MarkdownToolbar editor={editor} size={size} disabled={disabled} />
+        )}
+        <div
+          ref={containerRef}
+          onClick={handleFocus}
+          className={cn(
+            'markdown-editor',
+            disabled && 'opacity-50 cursor-not-allowed',
+            isCompact ? 'py-1.5 px-2' : 'py-2 px-3'
+          )}
+          style={{
+            minHeight: `${minHeight}px`,
+            maxHeight: `${maxHeight}px`,
+            overflowY: 'auto',
+          }}
+        >
+          <EditorContent editor={editor} />
+        </div>
+      </div>
+    );
+  }
+);
+
+MarkdownEditor.displayName = 'MarkdownEditor';

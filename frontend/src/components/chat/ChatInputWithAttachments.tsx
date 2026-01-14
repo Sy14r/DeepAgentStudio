@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Button, Textarea, Badge, Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui';
+import { useState, useRef, useCallback } from 'react';
+import { Button, Badge, Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui';
 import { Send, Paperclip, X, FileText, Image, FileCode, File, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MarkdownEditor, MarkdownEditorRef } from './MarkdownEditor';
 
 export interface Attachment {
   id: string;
@@ -75,17 +76,8 @@ export function ChatInputWithAttachments({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<MarkdownEditorRef>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Auto-resize textarea
-  useEffect(() => {
-    const textarea = inputRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
-    }
-  }, [value, maxHeight]);
 
   // Process file and create attachment
   const processFile = useCallback(async (file: File): Promise<Attachment | null> => {
@@ -178,15 +170,9 @@ export function ChatInputWithAttachments({
     onSend(value.trim(), attachments);
     onChange('');
     setAttachments([]);
+    // Clear the editor
+    editorRef.current?.clear();
   }, [value, attachments, onSend, onChange]);
-
-  // Handle keyboard
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }, [handleSend]);
 
   const isCompact = size === 'compact';
   const buttonHeight = isCompact ? 36 : 44;
@@ -268,21 +254,19 @@ export function ChatInputWithAttachments({
           </Tooltip>
         </TooltipProvider>
 
-        {/* Textarea */}
-        <Textarea
-          ref={inputRef}
+        {/* Markdown Editor */}
+        <MarkdownEditor
+          ref={editorRef}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onChange={onChange}
+          onSubmit={handleSend}
           placeholder={placeholder}
           disabled={disabled || isLoading}
-          className={cn(
-            'resize-none',
-            isCompact ? 'text-sm' : '',
-            `min-h-[${minHeight}px] max-h-[${maxHeight}px]`
-          )}
-          style={{ minHeight: `${minHeight}px`, maxHeight: `${maxHeight}px` }}
-          rows={1}
+          minHeight={minHeight}
+          maxHeight={maxHeight}
+          size={size}
+          showToolbar={true}
+          className="flex-1"
         />
 
         {/* Send/Stop button */}
