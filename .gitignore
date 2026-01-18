@@ -82,3 +82,6 @@ build/
 *.swp
 temp/
 tmp/
+
+# Git worktrees
+.worktrees/
