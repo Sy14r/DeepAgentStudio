@@ -48,6 +48,12 @@ class Agent(Base):
         back_populates="agents"
     )
     evaluation_runs = relationship("EvaluationRun", back_populates="agent")
+    mcp_permission = relationship(
+        "AgentPermission",
+        back_populates="agent",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         type_name = self.agent_type_config.name if self.agent_type_config else "unknown"
