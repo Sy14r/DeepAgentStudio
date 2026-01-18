@@ -1,6 +1,7 @@
 from .user import User
 from .agent import Agent, AgentVersion
 from .agent_permission import AgentPermission, PermissionPreset
+from .mcp_audit_log import MCPAuditLog
 from .agent_type import AgentTypeConfig, ExecutionStrategy, StrategyType, agent_type_recommended_tools
 from .tool import Tool, ToolType, ToolCategory, agent_tools
 from .prompt import Prompt, PromptVersion, MessageType, PromptUseCase
@@ -21,6 +22,7 @@ __all__ = [
     "User",
     "Agent", "AgentVersion",
     "AgentPermission", "PermissionPreset",
+    "MCPAuditLog",
     "AgentTypeConfig", "ExecutionStrategy", "StrategyType", "agent_type_recommended_tools",
     "Tool", "ToolType", "ToolCategory", "agent_tools",
     "Prompt", "PromptVersion", "MessageType", "PromptUseCase",
