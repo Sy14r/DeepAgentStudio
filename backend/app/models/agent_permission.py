@@ -3,7 +3,7 @@ from enum import Enum
 from datetime import datetime
 from typing import Optional, List
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum as SQLEnum, JSON
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -38,9 +38,9 @@ class AgentPermission(Base):
         index=True
     )
     preset = Column(
-        SQLEnum(PermissionPreset),
+        String(50),
         nullable=False,
-        default=PermissionPreset.OBSERVER
+        default=PermissionPreset.OBSERVER.value
     )
     custom_permissions = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
