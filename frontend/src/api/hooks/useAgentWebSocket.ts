@@ -13,7 +13,7 @@ import type { ContentBlock } from '../types';
 
 // WebSocket Event Types
 export interface WSEvent {
-  type: 'session_start' | 'tool_call' | 'tool_result' | 'error' | 'final_answer' | 'session_end' | 'pong' | 'span_start' | 'span_end' | 'session_title_update';
+  type: 'session_start' | 'tool_call' | 'tool_result' | 'error' | 'final_answer' | 'session_end' | 'pong' | 'span_start' | 'span_end' | 'session_title_update' | 'task_created' | 'task_updated' | 'task_completed' | 'task_removed';
   session_id: number;
   timestamp: string;
   payload: WSPayload;
@@ -28,7 +28,11 @@ export type WSPayload =
   | SessionEndPayload
   | SpanStartPayload
   | SpanEndPayload
-  | SessionTitleUpdatePayload;
+  | SessionTitleUpdatePayload
+  | TaskCreatedPayload
+  | TaskUpdatedPayload
+  | TaskCompletedPayload
+  | TaskRemovedPayload;
 
 export interface SessionStartPayload {
   agent_id: number;
@@ -97,6 +101,28 @@ export interface SpanEndPayload {
   error_message?: string;
 }
 
+// Task event payloads
+export interface TaskCreatedPayload {
+  task_id: number;
+  message: string;
+}
+
+export interface TaskUpdatedPayload {
+  task_id: number;
+  status?: string;
+  message: string;
+}
+
+export interface TaskCompletedPayload {
+  task_id: number;
+  message: string;
+}
+
+export interface TaskRemovedPayload {
+  task_id: number;
+  message: string;
+}
+
 // Hook Options
 export interface UseAgentWebSocketOptions {
   agentId: number;
@@ -109,6 +135,10 @@ export interface UseAgentWebSocketOptions {
   onSessionTitleUpdate?: (payload: SessionTitleUpdatePayload, sessionId: number) => void;
   onSpanStart?: (payload: SpanStartPayload, sessionId: number) => void;
   onSpanEnd?: (payload: SpanEndPayload, sessionId: number) => void;
+  onTaskCreated?: (payload: TaskCreatedPayload, sessionId: number) => void;
+  onTaskUpdated?: (payload: TaskUpdatedPayload, sessionId: number) => void;
+  onTaskCompleted?: (payload: TaskCompletedPayload, sessionId: number) => void;
+  onTaskRemoved?: (payload: TaskRemovedPayload, sessionId: number) => void;
   onConnectionChange?: (connected: boolean) => void;
   autoReconnect?: boolean;
   reconnectDelay?: number;
@@ -161,6 +191,10 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
     onSessionTitleUpdate,
     onSpanStart,
     onSpanEnd,
+    onTaskCreated,
+    onTaskUpdated,
+    onTaskCompleted,
+    onTaskRemoved,
     onConnectionChange,
     autoReconnect = true,
     reconnectDelay = 3000,
@@ -278,13 +312,30 @@ export function useAgentWebSocket(options: UseAgentWebSocketOptions): UseAgentWe
           // Heartbeat response - no action needed
           break;
 
+        // Task events
+        case 'task_created':
+          onTaskCreated?.(data.payload as TaskCreatedPayload, data.session_id);
+          break;
+
+        case 'task_updated':
+          onTaskUpdated?.(data.payload as TaskUpdatedPayload, data.session_id);
+          break;
+
+        case 'task_completed':
+          onTaskCompleted?.(data.payload as TaskCompletedPayload, data.session_id);
+          break;
+
+        case 'task_removed':
+          onTaskRemoved?.(data.payload as TaskRemovedPayload, data.session_id);
+          break;
+
         default:
           console.warn('Unknown WebSocket event type:', data.type);
       }
     } catch (err) {
       console.error('Failed to parse WebSocket message:', err);
     }
-  }, [onSessionStart, onToolCall, onToolResult, onFinalAnswer, onError, onSessionEnd, onSessionTitleUpdate, onSpanStart, onSpanEnd, enableSpanTracking, spanStore]);
+  }, [onSessionStart, onToolCall, onToolResult, onFinalAnswer, onError, onSessionEnd, onSessionTitleUpdate, onSpanStart, onSpanEnd, onTaskCreated, onTaskUpdated, onTaskCompleted, onTaskRemoved, enableSpanTracking, spanStore]);
 
   // Connect to WebSocket
   const connect = useCallback(() => {
