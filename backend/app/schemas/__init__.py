@@ -1,4 +1,9 @@
 from .user import UserBase, UserCreate, UserUpdate, UserResponse, Token, TokenData
+from .agent_permission import (
+    AgentPermissionCreate,
+    AgentPermissionUpdate,
+    AgentPermissionResponse,
+)
 from .agent import (
     LLMConfig,
     ReflectionConfig,
@@ -157,6 +162,10 @@ from .evaluation import (
 __all__ = [
     # User schemas
     "UserBase",
+    # Agent Permission schemas
+    "AgentPermissionCreate",
+    "AgentPermissionUpdate",
+    "AgentPermissionResponse",
     "UserCreate",
     "UserUpdate",
     "UserResponse",
