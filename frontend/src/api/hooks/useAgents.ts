@@ -6,6 +6,8 @@ import {
   AgentCreateRequest,
   AgentUpdateRequest,
   AgentListResponse,
+  AgentPermission,
+  AgentPermissionUpdate,
 } from '@/api/types';
 
 interface UseAgentsParams {
@@ -102,6 +104,36 @@ export function useCloneAgent() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+}
+
+// ============================================================================
+// Agent Permissions Hooks
+// ============================================================================
+
+export function useAgentPermissions(agentId: number | undefined) {
+  return useQuery({
+    queryKey: ['agentPermissions', agentId],
+    queryFn: async (): Promise<AgentPermission> => {
+      const response = await apiClient.get<AgentPermission>(`/agents/${agentId}/permissions`);
+      return response.data;
+    },
+    enabled: !!agentId,
+  });
+}
+
+export function useUpdateAgentPermissions(agentId: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: AgentPermissionUpdate): Promise<AgentPermission> => {
+      const response = await apiClient.put<AgentPermission>(`/agents/${agentId}/permissions`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agentPermissions', agentId] });
+      queryClient.invalidateQueries({ queryKey: ['agent', agentId] });
     },
   });
 }

@@ -97,6 +97,7 @@ def has_permission(permissions: Set[str], required: str) -> bool:
     Check if a permission set includes a required permission.
 
     Supports wildcards:
+    - "*" matches any permission (full access)
     - "agents:*" matches "agents:list", "agents:create", etc.
     - Exact matches take precedence
 
@@ -107,6 +108,10 @@ def has_permission(permissions: Set[str], required: str) -> bool:
     Returns:
         True if permission is granted
     """
+    # Full wildcard - matches everything
+    if "*" in permissions:
+        return True
+
     # Exact match
     if required in permissions:
         return True

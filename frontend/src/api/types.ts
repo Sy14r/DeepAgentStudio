@@ -1044,3 +1044,77 @@ export interface RunComparisonResponse {
   runs: RunComparisonMetrics[];
   metrics_comparison: Record<number, Record<string, unknown>>;
 }
+
+// ============================================================================
+// Task Types (Session Workspace Tasks)
+// ============================================================================
+
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
+
+export interface Task {
+  id: number;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  notes: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+export interface TasksResponse {
+  tasks: Task[];
+}
+
+// ============================================================================
+// MCP Agent Permissions
+// ============================================================================
+
+export type PermissionPreset = 'observer' | 'self_improve' | 'tool_creator' | 'meta_agent' | 'custom';
+
+export interface AgentPermission {
+  id: number;
+  agent_id: number;
+  preset: PermissionPreset;
+  custom_permissions: string[] | null;
+  effective_permissions: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentPermissionUpdate {
+  preset?: PermissionPreset;
+  custom_permissions?: string[];
+}
+
+// Permission preset metadata for UI display
+export const PERMISSION_PRESET_INFO: Record<PermissionPreset, {
+  label: string;
+  description: string;
+  icon: string;
+}> = {
+  observer: {
+    label: 'Observer',
+    description: 'Read-only access. Can view agents, tools, prompts, and datasets but cannot modify anything.',
+    icon: 'Eye',
+  },
+  self_improve: {
+    label: 'Self-Improve',
+    description: 'Can modify its own configuration, create prompts, and add examples to datasets.',
+    icon: 'Sparkles',
+  },
+  tool_creator: {
+    label: 'Tool Creator',
+    description: 'Self-improve permissions plus the ability to create and update custom tools.',
+    icon: 'Wrench',
+  },
+  meta_agent: {
+    label: 'Meta-Agent',
+    description: 'Full access to all MCP operations. Can create agents, tools, and manage all resources.',
+    icon: 'Crown',
+  },
+  custom: {
+    label: 'Custom',
+    description: 'Fine-grained permission control. Select individual permissions.',
+    icon: 'Settings',
+  },
+};
