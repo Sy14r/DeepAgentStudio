@@ -52,7 +52,7 @@ import {
 import { useAgents, useInvokeAgent, useAgentWebSocket, getErrorMessage, useTasks, useTasksUpdater } from '@/api/hooks';
 import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload, SessionTitleUpdatePayload, TaskCreatedPayload, TaskUpdatedPayload, TaskCompletedPayload, TaskRemovedPayload } from '@/api/hooks';
 import { useSessions, useSessionMessages, useSessionTraces } from '@/api/hooks/useSessions';
-import { TraceStep, Session, ContentBlock, Task } from '@/api/types';
+import { TraceStep, Session, ContentBlock } from '@/api/types';
 
 interface ChatMessage {
   id: string;
