@@ -101,6 +101,58 @@ class StreamingWebSocketCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             logger.error(f"Failed to send sync event: {e}")
 
+    def _emit_task_event(self, tool_output: Dict[str, Any]) -> None:
+        """
+        Emit task-related WebSocket events based on task_manager tool output.
+
+        Detects the action from the tool input/output and emits appropriate events:
+        - task_created: when action="add"
+        - task_updated: when action="update"
+        - task_completed: when status changes to "completed"
+        - task_removed: when action="remove"
+
+        Args:
+            tool_output: The parsed output from task_manager tool
+        """
+        try:
+            # Extract task info from tool output
+            # The output typically contains message and task_id fields
+            message = tool_output.get("message", "")
+            task_id = tool_output.get("task_id")
+
+            # Determine action from message content
+            if "created" in message.lower() and task_id:
+                self._send_event_sync("task_created", {
+                    "task_id": task_id,
+                    "message": message
+                })
+            elif "updated" in message.lower() and task_id:
+                status = tool_output.get("status")
+                if status == "completed":
+                    self._send_event_sync("task_completed", {
+                        "task_id": task_id,
+                        "message": message
+                    })
+                else:
+                    self._send_event_sync("task_updated", {
+                        "task_id": task_id,
+                        "status": status,
+                        "message": message
+                    })
+            elif "removed" in message.lower() and task_id:
+                self._send_event_sync("task_removed", {
+                    "task_id": task_id,
+                    "message": message
+                })
+            elif "completed" in message.lower() and task_id:
+                self._send_event_sync("task_completed", {
+                    "task_id": task_id,
+                    "message": message
+                })
+
+        except Exception as e:
+            logger.error(f"Failed to emit task event: {e}")
+
     def on_agent_action(
         self,
         action: AgentAction,
@@ -166,6 +218,7 @@ class StreamingWebSocketCallbackHandler(BaseCallbackHandler):
         Called when tool execution completes.
 
         Emits a 'tool_result' event with output and latency.
+        Also emits task events when task_manager tool is called.
         """
         # Get tool name - try kwargs first, then fall back to tracked current tool
         tool_name = kwargs.get("name", self._current_tool or "unknown")
@@ -192,6 +245,11 @@ class StreamingWebSocketCallbackHandler(BaseCallbackHandler):
             "tool_output": tool_output,
             "latency_ms": latency_ms
         })
+
+        # Emit task events when task_manager tool is called
+        if tool_name == "task_manager" and isinstance(tool_output, dict):
+            self._emit_task_event(tool_output)
+
         self.step_number += 1
         self._current_tool = None
 

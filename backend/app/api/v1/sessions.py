@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from ...database import get_db
 from ...services.media_storage import get_media_storage_service
+from ...services.workspace import get_workspace_service
 from ...models.user import User
 from ...models.agent import Agent
 from ...models.session import Session, Message, TraceStep, SessionStatus, MessageRole, Span
@@ -701,3 +702,47 @@ def get_session_media(
             "Cache-Control": "max-age=3600"  # Cache for 1 hour
         }
     )
+
+
+# ============================================================================
+# Task Management Endpoints
+# ============================================================================
+
+@router.get("/{session_id}/tasks")
+def get_session_tasks(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db)
+):
+    """
+    Get all tasks for a session's workspace.
+
+    Returns the task list managed by the agent during execution,
+    including task status, descriptions, and notes.
+
+    Returns:
+    - tasks: List of tasks with id, title, description, status, notes, timestamps
+    """
+    # Verify session ownership
+    session = db.query(Session).filter(
+        Session.id == session_id,
+        Session.user_id == current_user.id
+    ).first()
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found"
+        )
+
+    # Get workspace service and fetch tasks
+    workspace_service = get_workspace_service(db)
+    result = workspace_service.get_tasks(session_id)
+
+    if not result.success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.error or "Failed to get tasks"
+        )
+
+    return result.data
