@@ -40,7 +40,7 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       # Valid Fernet key for development (generate new one for production)
       ENCRYPTION_KEY: u3Uc-qAi9yCMm7XIp7-jMwPlJzYyiMn2B0xXhZ_BbRA=
-      CORS_ORIGINS: http://localhost:6001,http://localhost:3000,http://frontend:6001
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://frontend:5173,https://agents-dev.trmnl.life,http://agents-dev.trmnl.life
       ENVIRONMENT: development
       # LLM Provider API Keys (loaded from .env file if present)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -61,12 +61,12 @@ services:
     depends_on:
       - backend
     ports:
-      - "6001:6001"
+      - "5173:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: ""
     networks:
       - deepagent_network
 
