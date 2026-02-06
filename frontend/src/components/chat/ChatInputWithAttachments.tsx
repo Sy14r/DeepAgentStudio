@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Button, Textarea, Badge, Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui';
+import { useState, useRef, useCallback } from 'react';
+import { Button, Badge, Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui';
 import { Send, Paperclip, X, FileText, Image, FileCode, File, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MarkdownEditor, MarkdownEditorRef } from './MarkdownEditor';
 
 export interface Attachment {
   id: string;
@@ -62,7 +63,7 @@ export function ChatInputWithAttachments({
   value,
   onChange,
   onSend,
-  placeholder = 'Type your message... (Shift+Enter for new line)',
+  placeholder = 'Type your message... (Ctrl+Enter to send)',
   disabled = false,
   isLoading = false,
   maxHeight = 200,
@@ -75,17 +76,8 @@ export function ChatInputWithAttachments({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<MarkdownEditorRef>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Auto-resize textarea
-  useEffect(() => {
-    const textarea = inputRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
-    }
-  }, [value, maxHeight]);
 
   // Process file and create attachment
   const processFile = useCallback(async (file: File): Promise<Attachment | null> => {
@@ -178,25 +170,54 @@ export function ChatInputWithAttachments({
     onSend(value.trim(), attachments);
     onChange('');
     setAttachments([]);
+    // Clear the editor
+    editorRef.current?.clear();
   }, [value, attachments, onSend, onChange]);
 
-  // Handle keyboard
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }, [handleSend]);
-
   const isCompact = size === 'compact';
-  const buttonHeight = isCompact ? 36 : 44;
   const iconSize = isCompact ? 'h-4 w-4' : 'h-4 w-4';
 
   return (
-    <div className={cn('space-y-2', className)}>
-      {/* Attachment Preview */}
+    <div
+      className={cn(
+        'relative rounded-md border border-input bg-background',
+        'ring-offset-background focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2',
+        isDragging && 'ring-2 ring-primary ring-offset-2',
+        disabled && 'opacity-50 cursor-not-allowed',
+        className
+      )}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => handleFileSelect(e.target.files)}
+        accept="image/*,.txt,.md,.json,.csv,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.swift,.kt,.scala,.sh,.bash,.sql"
+      />
+
+      {/* Markdown Editor (no outer border - we handle it here) */}
+      <MarkdownEditor
+        ref={editorRef}
+        value={value}
+        onChange={onChange}
+        onSubmit={handleSend}
+        placeholder={placeholder}
+        disabled={disabled || isLoading}
+        minHeight={minHeight}
+        maxHeight={maxHeight}
+        size={size}
+        showToolbar={true}
+        className="border-0 ring-0 focus-within:ring-0 focus-within:ring-offset-0"
+      />
+
+      {/* Attachment Preview (if any) */}
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-1">
+        <div className="flex flex-wrap gap-2 px-3 pb-2 border-t border-input pt-2">
           {attachments.map((attachment) => (
             <Badge
               key={attachment.id}
@@ -227,37 +248,22 @@ export function ChatInputWithAttachments({
         </div>
       )}
 
-      {/* Input Area */}
-      <div
-        className={cn(
-          'flex gap-2 items-end relative',
-          isDragging && 'ring-2 ring-primary ring-offset-2 rounded-md'
-        )}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        {/* Hidden file input */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => handleFileSelect(e.target.files)}
-          accept="image/*,.txt,.md,.json,.csv,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.swift,.kt,.scala,.sh,.bash,.sql"
-        />
-
-        {/* Attachment button */}
+      {/* Action Bar */}
+      <div className={cn(
+        'flex items-center justify-between',
+        isCompact ? 'px-1 py-1' : 'px-2 py-1'
+      )}>
+        {/* Left: Attachment button */}
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 type="button"
                 variant="ghost"
-                size="icon"
+                size="sm"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={disabled || isLoading}
-                className={cn('shrink-0', isCompact ? 'h-[36px] w-[36px]' : 'h-[44px] w-[44px]')}
+                className={cn(isCompact ? 'h-7 w-7 p-0' : 'h-8 w-8 p-0')}
               >
                 <Paperclip className={iconSize} />
               </Button>
@@ -268,50 +274,33 @@ export function ChatInputWithAttachments({
           </Tooltip>
         </TooltipProvider>
 
-        {/* Textarea */}
-        <Textarea
-          ref={inputRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          disabled={disabled || isLoading}
-          className={cn(
-            'resize-none',
-            isCompact ? 'text-sm' : '',
-            `min-h-[${minHeight}px] max-h-[${maxHeight}px]`
-          )}
-          style={{ minHeight: `${minHeight}px`, maxHeight: `${maxHeight}px` }}
-          rows={1}
-        />
-
-        {/* Send/Stop button */}
+        {/* Right: Send/Stop button */}
         {showStopButton && isLoading ? (
           <Button
-            size={isCompact ? 'sm' : 'default'}
+            size="sm"
             variant="destructive"
             onClick={onStop}
-            className={`shrink-0 h-[${buttonHeight}px]`}
-            style={{ height: `${buttonHeight}px` }}
+            className={cn(isCompact ? 'h-7 px-3' : 'h-8 px-4')}
           >
-            <Square className={iconSize} />
+            <Square className={cn(iconSize, 'mr-1')} />
+            Stop
           </Button>
         ) : (
           <Button
-            size={isCompact ? 'sm' : 'default'}
+            size="sm"
             onClick={handleSend}
             disabled={(!value.trim() && attachments.length === 0) || disabled || isLoading}
-            className={`shrink-0 h-[${buttonHeight}px]`}
-            style={{ height: `${buttonHeight}px` }}
+            className={cn(isCompact ? 'h-7 px-3' : 'h-8 px-4')}
           >
-            <Send className={iconSize} />
+            <Send className={cn(iconSize, 'mr-1')} />
+            Send
           </Button>
         )}
       </div>
 
       {/* Drag overlay hint */}
       {isDragging && (
-        <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary rounded-md flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary rounded-md flex items-center justify-center pointer-events-none z-10">
           <p className="text-sm font-medium text-primary">Drop files here</p>
         </div>
       )}

@@ -6,6 +6,8 @@ export {
   useUpdateAgent,
   useDeleteAgent,
   useCloneAgent,
+  useAgentPermissions,
+  useUpdateAgentPermissions,
 } from './useAgents';
 export {
   useAgentTypes,
@@ -67,6 +69,7 @@ export type {
 export { useInvokeAgent } from './useInvoke';
 export { useSessions, useSession, useSessionStatistics, useSessionMessages, useSessionTraces, useUpdateSession, useDeleteSession } from './useSessions';
 export { useAgentWebSocket } from './useAgentWebSocket';
+export { useTasks, useTasksUpdater } from './useTasks';
 export type {
   UseAgentWebSocketOptions,
   UseAgentWebSocketReturn,
@@ -80,6 +83,10 @@ export type {
   SessionTitleUpdatePayload,
   SpanStartPayload,
   SpanEndPayload,
+  TaskCreatedPayload,
+  TaskUpdatedPayload,
+  TaskCompletedPayload,
+  TaskRemovedPayload,
 } from './useAgentWebSocket';
 export {
   // Dataset hooks

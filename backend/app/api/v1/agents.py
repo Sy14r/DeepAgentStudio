@@ -32,6 +32,12 @@ from ...schemas.mcp_server import (
     AgentMCPServerAssignment,
     MCPServerConfigResponse,
 )
+from ...schemas.agent_permission import (
+    AgentPermissionUpdate,
+    AgentPermissionResponse,
+)
+from ...models.agent_permission import AgentPermission, PermissionPreset
+from ...mcp_server.permissions import resolve_permissions
 from ...schemas.session import (
     InvokeRequest,
     InvokeResponse,
@@ -943,6 +949,151 @@ def _server_to_response(server: MCPServerConfig) -> MCPServerConfigResponse:
         created_at=server.created_at,
         updated_at=server.updated_at,
     )
+
+
+# ============================================================================
+# Agent MCP Permission Endpoints
+# ============================================================================
+
+def _build_permission_response(permission: AgentPermission) -> AgentPermissionResponse:
+    """Build permission response with effective permissions computed."""
+    effective = resolve_permissions(
+        permission.preset,
+        permission.custom_permissions
+    )
+    return AgentPermissionResponse(
+        id=permission.id,
+        agent_id=permission.agent_id,
+        preset=permission.preset,
+        custom_permissions=permission.custom_permissions,
+        effective_permissions=sorted(list(effective)),
+        created_at=permission.created_at,
+        updated_at=permission.updated_at
+    )
+
+
+@router.get("/{agent_id}/permissions", response_model=AgentPermissionResponse)
+def get_agent_permissions(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get MCP permissions for an agent.
+
+    Returns the agent's permission preset and effective permissions.
+    If no permissions exist, returns default Observer preset.
+    """
+    from sqlalchemy import or_
+
+    # Check if agent exists and user has access
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        or_(
+            Agent.user_id == current_user.id,
+            Agent.is_builtin == True
+        )
+    ).first()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found"
+        )
+
+    # Get or create permission record
+    permission = db.query(AgentPermission).filter(
+        AgentPermission.agent_id == agent_id
+    ).first()
+
+    if not permission:
+        # Return default observer permissions without creating record
+        effective = resolve_permissions(PermissionPreset.OBSERVER.value, None)
+        return AgentPermissionResponse(
+            id=0,  # Indicates no record exists yet
+            agent_id=agent_id,
+            preset=PermissionPreset.OBSERVER.value,
+            custom_permissions=None,
+            effective_permissions=sorted(list(effective)),
+            created_at=agent.created_at,
+            updated_at=agent.updated_at
+        )
+
+    return _build_permission_response(permission)
+
+
+@router.put("/{agent_id}/permissions", response_model=AgentPermissionResponse)
+def update_agent_permissions(
+    agent_id: int,
+    permission_data: AgentPermissionUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update MCP permissions for an agent.
+
+    Only the agent owner can update permissions.
+    Built-in agents cannot have their permissions modified.
+
+    Permission presets:
+    - observer: Read-only access to resources
+    - self_improve: Can modify own agent configuration
+    - tool_creator: Can create and manage tools
+    - meta_agent: Full access to all MCP operations
+    - custom: Use custom_permissions list for fine-grained control
+    """
+    # Check if agent exists and user owns it
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.user_id == current_user.id
+    ).first()
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found"
+        )
+
+    # Prevent modifying built-in agents
+    if agent.is_builtin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Built-in agents cannot have permissions modified. Clone to create your own copy."
+        )
+
+    # Validate preset if provided
+    if permission_data.preset is not None:
+        valid_presets = [p.value for p in PermissionPreset]
+        if permission_data.preset not in valid_presets:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid preset. Must be one of: {', '.join(valid_presets)}"
+            )
+
+    # Get or create permission record
+    permission = db.query(AgentPermission).filter(
+        AgentPermission.agent_id == agent_id
+    ).first()
+
+    if not permission:
+        # Create new permission record
+        permission = AgentPermission(
+            agent_id=agent_id,
+            preset=permission_data.preset or PermissionPreset.OBSERVER.value,
+            custom_permissions=permission_data.custom_permissions
+        )
+        db.add(permission)
+    else:
+        # Update existing record
+        if permission_data.preset is not None:
+            permission.preset = permission_data.preset
+        if permission_data.custom_permissions is not None:
+            permission.custom_permissions = permission_data.custom_permissions
+
+    db.commit()
+    db.refresh(permission)
+
+    return _build_permission_response(permission)
 
 
 # ============= POWER AGENT ENDPOINTS =============

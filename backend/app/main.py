@@ -31,6 +31,12 @@ async def lifespan(app: FastAPI):
         evaluator_service = EvaluatorService(db)
         evaluator_service.seed_builtin_evaluators()
         logger.info("Built-in evaluators seeded successfully")
+
+        # Register MCP tools
+        logger.info("Registering MCP tools...")
+        from .mcp_server.tools import register_all_tools
+        register_all_tools()
+        logger.info("MCP tools registered successfully")
     except Exception as e:
         logger.error(f"Failed to seed built-in items: {e}")
     finally:
@@ -79,7 +85,7 @@ async def health_check():
 
 
 # API routers
-from .api.v1 import auth, agents, agent_types, tools, prompts, sessions, llm_providers, websocket, mcp_servers, spans, evaluations
+from .api.v1 import auth, agents, agent_types, tools, prompts, sessions, llm_providers, websocket, mcp_servers, spans, evaluations, mcp
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
@@ -92,3 +98,4 @@ app.include_router(llm_providers.router, prefix="/api/v1/llm-providers", tags=["
 app.include_router(mcp_servers.router, prefix="/api/v1/mcp-servers", tags=["mcp-servers"])
 app.include_router(evaluations.router, prefix="/api/v1/evaluations", tags=["evaluations"])
 app.include_router(websocket.router, prefix="/api/v1/ws", tags=["websocket"])
+app.include_router(mcp.router, prefix="/api/v1/mcp", tags=["mcp"])

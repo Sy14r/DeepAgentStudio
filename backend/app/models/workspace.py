@@ -82,7 +82,12 @@ class SessionTask(Base):
     task_number = Column(Integer, nullable=False)  # Per-session sequential ID
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=True)
-    status = Column(SQLEnum(TaskStatus), nullable=False, default=TaskStatus.PENDING, index=True)
+    status = Column(
+        SQLEnum(TaskStatus, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=TaskStatus.PENDING,
+        index=True
+    )
     notes = Column(Text, nullable=True)  # Accumulated notes/updates
 
     # Timestamps

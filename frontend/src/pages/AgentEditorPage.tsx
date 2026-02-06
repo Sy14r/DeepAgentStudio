@@ -76,6 +76,7 @@ import { AgentCreateRequest, TraceStep, ContentBlock } from '@/api/types';
 import { ContentBlockRenderer } from '@/components/chat/content-blocks';
 import { SessionDetailDialog } from '@/components/sessions';
 import { PromptSelector } from '@/components/prompts';
+import { AgentPermissionsPanel } from '@/components/agents/AgentPermissionsPanel';
 
 // Form schema
 const agentFormSchema = z.object({
@@ -756,10 +757,11 @@ export function AgentEditorPage() {
             <Form {...form}>
               <form className="flex flex-col flex-1 overflow-hidden">
               <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-                <TabsList className="grid w-full grid-cols-3 mx-4 mt-4 mb-2" style={{ width: 'calc(100% - 2rem)' }}>
+                <TabsList className="grid w-full grid-cols-4 mx-4 mt-4 mb-2" style={{ width: 'calc(100% - 2rem)' }}>
                   <TabsTrigger value="basic">Basic Info</TabsTrigger>
                   <TabsTrigger value="config">Configuration</TabsTrigger>
                   <TabsTrigger value="tools">Tools & Prompts</TabsTrigger>
+                  <TabsTrigger value="permissions">Permissions</TabsTrigger>
                 </TabsList>
 
                 <ScrollArea className="flex-1 px-4">
@@ -1285,6 +1287,20 @@ export function AgentEditorPage() {
                         }}
                       />
                     </div>
+                  </TabsContent>
+
+                  {/* Permissions Tab */}
+                  <TabsContent value="permissions" className="space-y-4 mt-2 pb-4">
+                    {isEditing && agentId ? (
+                      <AgentPermissionsPanel
+                        agentId={agentId}
+                        isBuiltin={agent?.is_builtin}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
+                        Save the agent first to configure permissions.
+                      </div>
+                    )}
                   </TabsContent>
                 </ScrollArea>
               </Tabs>

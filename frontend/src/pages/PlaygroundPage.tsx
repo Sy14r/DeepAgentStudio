@@ -20,8 +20,13 @@ import {
   AlertDescription,
   Switch,
   Label,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
 } from '@/components/ui';
 import { ChatInputWithAttachments, Attachment, ContentBlocks } from '@/components/chat';
+import { TaskList } from '@/components/tasks';
 import {
   Play,
   MessageSquare,
@@ -42,9 +47,10 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
+  ListTodo,
 } from 'lucide-react';
-import { useAgents, useInvokeAgent, useAgentWebSocket, getErrorMessage } from '@/api/hooks';
-import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload, SessionTitleUpdatePayload } from '@/api/hooks';
+import { useAgents, useInvokeAgent, useAgentWebSocket, getErrorMessage, useTasks, useTasksUpdater } from '@/api/hooks';
+import type { ToolCallPayload, ToolResultPayload, FinalAnswerPayload, ErrorPayload, SessionTitleUpdatePayload, TaskCreatedPayload, TaskUpdatedPayload, TaskCompletedPayload, TaskRemovedPayload } from '@/api/hooks';
 import { useSessions, useSessionMessages, useSessionTraces } from '@/api/hooks/useSessions';
 import { TraceStep, Session, ContentBlock } from '@/api/types';
 
@@ -378,6 +384,7 @@ export function PlaygroundPage() {
   const [streamingEnabled, setStreamingEnabled] = useState(true);
   const [_pendingStreamMessage, setPendingStreamMessage] = useState<string | null>(null);
   const [hasLoadedUrlSession, setHasLoadedUrlSession] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'trace' | 'tasks'>('trace');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const traceStepIdRef = useRef(0);
@@ -398,6 +405,10 @@ export function PlaygroundPage() {
 
   // Fetch traces when resuming a session (will also be used to sync after execution)
   const { data: sessionTraces, refetch: refetchTraces } = useSessionTraces(sessionId || undefined);
+
+  // Fetch tasks for the session
+  const { data: tasksData, isLoading: isLoadingTasks } = useTasks(sessionId || undefined);
+  const taskUpdater = useTasksUpdater();
 
   const invokeAgent = useInvokeAgent(selectedAgentId || 0);
 
@@ -477,6 +488,23 @@ export function PlaygroundPage() {
     setSessionTitle(payload.title);
   }, []);
 
+  // Task event callbacks - invalidate cache to refetch tasks
+  const handleTaskCreated = useCallback((_payload: TaskCreatedPayload, wsSessionId: number) => {
+    taskUpdater.invalidate(wsSessionId);
+  }, [taskUpdater]);
+
+  const handleTaskUpdated = useCallback((_payload: TaskUpdatedPayload, wsSessionId: number) => {
+    taskUpdater.invalidate(wsSessionId);
+  }, [taskUpdater]);
+
+  const handleTaskCompleted = useCallback((_payload: TaskCompletedPayload, wsSessionId: number) => {
+    taskUpdater.invalidate(wsSessionId);
+  }, [taskUpdater]);
+
+  const handleTaskRemoved = useCallback((_payload: TaskRemovedPayload, wsSessionId: number) => {
+    taskUpdater.invalidate(wsSessionId);
+  }, [taskUpdater]);
+
   // WebSocket hook
   const {
     isConnected,
@@ -492,6 +520,10 @@ export function PlaygroundPage() {
     onFinalAnswer: handleFinalAnswer,
     onError: handleStreamError,
     onSessionTitleUpdate: handleSessionTitleUpdate,
+    onTaskCreated: handleTaskCreated,
+    onTaskUpdated: handleTaskUpdated,
+    onTaskCompleted: handleTaskCompleted,
+    onTaskRemoved: handleTaskRemoved,
   });
 
   const agents = agentsData?.agents || [];
@@ -883,49 +915,76 @@ export function PlaygroundPage() {
           </CardContent>
         </Card>
 
-        {/* Trace Panel */}
+        {/* Right Panel - Trace & Tasks Tabs */}
         <Card className="flex flex-col min-h-0 min-w-0 overflow-hidden">
-          <CardHeader className="py-3 border-b shrink-0">
-            <div className="flex items-center gap-2">
-              <GitBranch className="h-5 w-5" />
-              <CardTitle className="text-lg">Execution Trace</CardTitle>
-              {traceSteps.length > 0 && (
-                <Badge variant="outline" className="ml-auto">
-                  {traceSteps.length} steps
-                </Badge>
-              )}
-              {sessionId && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  asChild
-                  className="h-7 text-xs gap-1"
-                >
-                  <Link to={`/sessions/${sessionId}/trace`}>
-                    View Full Trace
-                    <ExternalLink className="h-3 w-3" />
-                  </Link>
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="flex-1 p-0 min-h-0 overflow-hidden">
-            <ScrollArea className="h-full w-full">
-              <div className="p-4 w-0 min-w-full">
-                {traceSteps.length === 0 ? (
-                  <div className="h-full flex items-center justify-center text-muted-foreground text-center">
-                    Execution trace will appear here during conversations.
-                  </div>
-                ) : (
-                  <div className="space-y-3 overflow-hidden">
-                    {traceSteps.map((step, index) => (
-                      <TraceStepItem key={`${step.id}-${index}`} step={step} />
-                    ))}
-                  </div>
+          <Tabs
+            value={rightPanelTab}
+            onValueChange={(value) => setRightPanelTab(value as 'trace' | 'tasks')}
+            className="flex flex-col h-full"
+          >
+            <div className="py-3 px-4 border-b shrink-0">
+              <div className="flex items-center gap-2">
+                <TabsList className="h-8">
+                  <TabsTrigger value="trace" className="text-xs gap-1.5 px-3">
+                    <GitBranch className="h-3.5 w-3.5" />
+                    Trace
+                    {traceSteps.length > 0 && (
+                      <Badge variant="secondary" className="h-5 px-1.5 text-xs ml-1">
+                        {traceSteps.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
+                  <TabsTrigger value="tasks" className="text-xs gap-1.5 px-3">
+                    <ListTodo className="h-3.5 w-3.5" />
+                    Tasks
+                    {tasksData?.tasks && tasksData.tasks.length > 0 && (
+                      <Badge variant="secondary" className="h-5 px-1.5 text-xs ml-1">
+                        {tasksData.tasks.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
+                {sessionId && rightPanelTab === 'trace' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    asChild
+                    className="h-7 text-xs gap-1 ml-auto"
+                  >
+                    <Link to={`/sessions/${sessionId}/trace`}>
+                      View Full Trace
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </Button>
                 )}
               </div>
-            </ScrollArea>
-          </CardContent>
+            </div>
+
+            <TabsContent value="trace" className="flex-1 m-0 overflow-hidden">
+              <ScrollArea className="h-full w-full">
+                <div className="p-4 w-0 min-w-full">
+                  {traceSteps.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-muted-foreground text-center">
+                      Execution trace will appear here during conversations.
+                    </div>
+                  ) : (
+                    <div className="space-y-3 overflow-hidden">
+                      {traceSteps.map((step, index) => (
+                        <TraceStepItem key={`${step.id}-${index}`} step={step} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </TabsContent>
+
+            <TabsContent value="tasks" className="flex-1 m-0 overflow-hidden">
+              <TaskList
+                tasks={tasksData?.tasks || []}
+                isLoading={isLoadingTasks}
+              />
+            </TabsContent>
+          </Tabs>
         </Card>
       </div>
     </div>

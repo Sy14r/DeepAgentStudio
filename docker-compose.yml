@@ -40,7 +40,7 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       # Valid Fernet key for development (generate new one for production)
       ENCRYPTION_KEY: u3Uc-qAi9yCMm7XIp7-jMwPlJzYyiMn2B0xXhZ_BbRA=
-      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://frontend:5173
+      CORS_ORIGINS: http://localhost:6001,http://localhost:3000,http://frontend:6001
       ENVIRONMENT: development
       # LLM Provider API Keys (loaded from .env file if present)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -61,7 +61,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:5173"
+      - "6001:6001"
     volumes:
       - ./frontend:/app
       - /app/node_modules
