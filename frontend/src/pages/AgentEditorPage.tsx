@@ -381,6 +381,56 @@ export function AgentEditorPage() {
     }
   }, [isEditing, defaultAgentTypeId, defaultProviderId, form]);
 
+  // Apply agent type defaults when agent_type_id changes (for new agents only)
+  const watchedAgentTypeId = form.watch('agent_type_id');
+  useEffect(() => {
+    // Only apply defaults for new agents, not when editing
+    if (isEditing || !watchedAgentTypeId || watchedAgentTypeId === 0) return;
+
+    const selectedAgentType = agentTypes.find(at => at.id === watchedAgentTypeId);
+    if (!selectedAgentType) return;
+
+    // Apply recommended tools (or clear if agent type has none)
+    if (selectedAgentType.recommended_tools && selectedAgentType.recommended_tools.length > 0) {
+      const toolIds = selectedAgentType.recommended_tools.map(t => t.id);
+      form.setValue('tool_ids', toolIds);
+    } else {
+      // Clear tools if this agent type has no recommendations (e.g., Conversational)
+      form.setValue('tool_ids', []);
+    }
+
+    // Apply system prompt template
+    if (selectedAgentType.system_prompt_template) {
+      form.setValue('system_prompt', selectedAgentType.system_prompt_template);
+      form.setValue('use_prompt_library', false);
+    }
+
+    // Apply default LLM config
+    if (selectedAgentType.default_llm_config) {
+      const llmConfig = selectedAgentType.default_llm_config;
+      if (llmConfig.model) {
+        form.setValue('model', llmConfig.model);
+      }
+      if (llmConfig.temperature !== undefined) {
+        form.setValue('temperature', llmConfig.temperature);
+      }
+      if (llmConfig.max_tokens !== undefined) {
+        form.setValue('max_tokens', llmConfig.max_tokens);
+      }
+    }
+
+    // Apply default memory config
+    if (selectedAgentType.default_memory_config) {
+      const memConfig = selectedAgentType.default_memory_config;
+      if (memConfig.type) {
+        form.setValue('memory_type', memConfig.type);
+      }
+      if (memConfig.context_window !== undefined) {
+        form.setValue('context_window', memConfig.context_window);
+      }
+    }
+  }, [watchedAgentTypeId, agentTypes, isEditing, form]);
+
   // Load agent data when editing
   useEffect(() => {
     if (agent && isEditing && providersData) {
