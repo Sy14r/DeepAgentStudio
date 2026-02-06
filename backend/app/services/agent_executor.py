@@ -37,6 +37,7 @@ from .memory import ConversationMemoryService
 from .workspace_tools import create_workspace_tools, WORKSPACE_TOOL_NAMES
 from .web_tools import create_web_tools, WEB_TOOL_CLASSES
 from .prompt_service import PromptService, PromptNotFoundError, PromptResolutionResult
+from .codeact_executor import create_codeact_executor, CodeActResult
 from ..encryption import decrypt_api_key
 import json
 import asyncio
@@ -894,6 +895,10 @@ class AgentExecutorService:
             return self._execute_conversational_agent(
                 llm, tools, input_message, config, recorder, timeout_seconds, chat_history, attachments, tracing_callback
             )
+        elif execution_strategy == ExecutionStrategy.codeact:
+            return self._execute_codeact_agent(
+                llm, tools, input_message, config, recorder, timeout_seconds, chat_history, tracing_callback
+            )
         else:
             raise AgentConfigurationError(
                 f"Unsupported execution strategy: {execution_strategy}"
@@ -1270,6 +1275,95 @@ class AgentExecutorService:
             tokens_input=tokens_input,
             tokens_output=tokens_output,
             steps=[]
+        )
+
+    def _execute_codeact_agent(
+        self,
+        llm,
+        tools: List[BaseTool],
+        input_message: str,
+        config: Dict[str, Any],
+        recorder: SessionRecorder,
+        timeout_seconds: int,
+        chat_history: List = None,
+        tracing_callback=None
+    ) -> ExecutionResult:
+        """
+        Execute CodeAct agent (code-as-action paradigm).
+
+        The agent writes Python code blocks which are executed directly,
+        with tool functions available in the execution namespace.
+        """
+        if chat_history is None:
+            chat_history = []
+
+        system_prompt, _ = self._resolve_system_prompt(config)
+
+        # Get session_id from recorder
+        session_id = recorder.session.id if hasattr(recorder, 'session') else None
+        if session_id is None:
+            raise AgentConfigurationError("CodeAct requires a valid session ID")
+
+        # Create CodeAct executor with tool namespace
+        codeact_executor = create_codeact_executor(
+            db=self.db,
+            session_id=session_id,
+            llm=llm,
+            additional_tools=tools,
+            max_iterations=config.get("max_iterations", 15)
+        )
+
+        # Record that we're using CodeAct
+        recorder.record_thought("Using CodeAct execution strategy (code-as-action)")
+
+        # Execute CodeAct loop
+        result = codeact_executor.execute(
+            input_message=input_message,
+            system_prompt=system_prompt,
+            chat_history=chat_history
+        )
+
+        # Record steps from CodeAct execution
+        for step in result.steps:
+            if step.get("step_type") == "code_execution":
+                exec_result = step.get("execution_result", {})
+                recorder.record_trace_step(
+                    TraceStepType.TOOL_CALL,
+                    content=f"Code execution",
+                    metadata={
+                        "code": step.get("code", "")[:500],
+                        "success": exec_result.get("success", False)
+                    }
+                )
+                # Record the observation
+                if exec_result.get("stdout"):
+                    recorder.record_trace_step(
+                        TraceStepType.OBSERVATION,
+                        content=exec_result.get("stdout", "")[:1000]
+                    )
+                if exec_result.get("error_message"):
+                    recorder.record_trace_step(
+                        TraceStepType.ERROR,
+                        content=f"{exec_result.get('error_type', 'Error')}: {exec_result.get('error_message', '')}"
+                    )
+
+        if not result.success:
+            return ExecutionResult(
+                success=False,
+                output="",
+                error=result.error_message,
+                error_type=result.error_type,
+                tokens_input=result.tokens_input,
+                tokens_output=result.tokens_output,
+                steps=result.steps
+            )
+
+        return ExecutionResult(
+            success=True,
+            output=result.output,
+            tokens_input=result.tokens_input,
+            tokens_output=result.tokens_output,
+            steps=result.steps
         )
 
 

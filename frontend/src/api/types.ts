@@ -28,7 +28,7 @@ export interface RegisterRequest {
 export type AgentType = 'ReAct' | 'Plan-and-Execute' | 'Conversational' | 'Custom';
 
 // Agent Type Config types (new entity)
-export type ExecutionStrategy = 'react' | 'plan_and_execute' | 'conversational';
+export type ExecutionStrategy = 'react' | 'plan_and_execute' | 'conversational' | 'codeact';
 export type StrategyType = 'builtin' | 'custom_code';
 
 export interface DefaultLLMConfig {

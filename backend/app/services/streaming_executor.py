@@ -46,6 +46,7 @@ from .workspace_tools import create_workspace_tools, WORKSPACE_TOOL_NAMES
 from .web_tools import create_web_tools, WEB_TOOL_CLASSES
 from .tool_wrapper import is_workspace_tool_class, WORKSPACE_TOOL_CLASSES, is_web_tool_class
 from .image_generation_tools import create_image_generation_tools, IMAGE_GENERATION_TOOL_CLASSES
+from .codeact_executor import create_codeact_executor, CodeActResult, CodeExecutionResult
 # Title generation moved to WebSocket handler for immediate execution
 
 logger = logging.getLogger(__name__)
@@ -368,7 +369,14 @@ class StreamingAgentExecutorService(AgentExecutorService):
             logger.info(f"  has_images={has_images}, use_tool_calling={use_tool_calling}, supports_tc={supports_tool_calling(model_name)}")
             logger.info(f"  tools_count={len(tools) if tools else 0}, attachments_count={len(attachments) if attachments else 0}")
 
-            if execution_strategy == ExecutionStrategy.conversational:
+            if execution_strategy == ExecutionStrategy.codeact:
+                # CodeAct agent - code-as-action paradigm
+                return self._run_codeact_agent(
+                    llm, tools, input_message, system_prompt, config, chat_history,
+                    streaming_callback, recorder
+                )
+
+            elif execution_strategy == ExecutionStrategy.conversational:
                 # Conversational agent - no tools
                 return self._run_conversational(
                     llm, input_message, system_prompt, chat_history, attachments
@@ -645,4 +653,90 @@ class StreamingAgentExecutorService(AgentExecutorService):
             "steps": [],
             "tokens_input": tokens_input,
             "tokens_output": tokens_output
+        }
+
+    def _run_codeact_agent(
+        self,
+        llm,
+        tools: List[BaseTool],
+        input_message: str,
+        system_prompt: str,
+        config: Dict[str, Any],
+        chat_history: List,
+        streaming_callback,
+        recorder
+    ) -> Dict[str, Any]:
+        """
+        Run CodeAct agent (code-as-action paradigm).
+
+        The agent writes Python code blocks which are executed directly,
+        with tool functions available in the execution namespace.
+        """
+        # Get session_id from recorder
+        session_id = recorder.session.id if hasattr(recorder, 'session') else None
+        if session_id is None:
+            raise ValueError("CodeAct requires a valid session ID")
+
+        # Create callbacks for streaming code execution events
+        def on_code_execution(code: str, result: CodeExecutionResult):
+            """Send code execution event via streaming callback."""
+            if streaming_callback and hasattr(streaming_callback, 'websocket'):
+                import asyncio
+                try:
+                    loop = streaming_callback.loop
+                    event = {
+                        "type": "code_result",
+                        "session_id": session_id,
+                        "payload": {
+                            "code": code[:1000],  # Truncate for safety
+                            "success": result.success,
+                            "stdout": result.stdout[:2000] if result.stdout else "",
+                            "stderr": result.stderr[:500] if result.stderr else "",
+                            "error_message": result.error_message,
+                            "error_type": result.error_type
+                        }
+                    }
+                    asyncio.run_coroutine_threadsafe(
+                        streaming_callback.websocket.send_json(event),
+                        loop
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send code_result event: {e}")
+
+        # Create CodeAct executor
+        codeact_executor = create_codeact_executor(
+            db=self.db,
+            session_id=session_id,
+            llm=llm,
+            additional_tools=tools,
+            max_iterations=config.get("max_iterations", 15),
+            on_code_execution=on_code_execution
+        )
+
+        # Execute CodeAct loop
+        result = codeact_executor.execute(
+            input_message=input_message,
+            system_prompt=system_prompt,
+            chat_history=chat_history
+        )
+
+        # Convert CodeAct steps to standard step format
+        steps = []
+        for step in result.steps:
+            if step.get("step_type") == "code_execution":
+                exec_result = step.get("execution_result", {})
+                steps.append({
+                    "step_type": "code_execution",
+                    "code": step.get("code", ""),
+                    "success": exec_result.get("success", False),
+                    "stdout": exec_result.get("stdout", ""),
+                    "error_message": exec_result.get("error_message", "")
+                })
+
+        return {
+            "output": result.output,
+            "content_blocks": [],
+            "steps": steps,
+            "tokens_input": result.tokens_input,
+            "tokens_output": result.tokens_output
         }

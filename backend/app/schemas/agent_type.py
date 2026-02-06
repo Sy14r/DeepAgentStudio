@@ -16,6 +16,7 @@ class ExecutionStrategy(str, Enum):
     react = "react"
     plan_and_execute = "plan_and_execute"
     conversational = "conversational"
+    codeact = "codeact"
 
 
 class StrategyType(str, Enum):

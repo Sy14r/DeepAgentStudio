@@ -54,18 +54,21 @@ const STRATEGY_OPTIONS: { value: ExecutionStrategy | 'all'; label: string }[] = 
   { value: 'react', label: 'ReAct' },
   { value: 'plan_and_execute', label: 'Plan & Execute' },
   { value: 'conversational', label: 'Conversational' },
+  { value: 'codeact', label: 'CodeAct' },
 ];
 
 const STRATEGY_LABELS: Record<ExecutionStrategy, string> = {
   react: 'ReAct',
   plan_and_execute: 'Plan & Execute',
   conversational: 'Conversational',
+  codeact: 'CodeAct',
 };
 
 const STRATEGY_COLORS: Record<ExecutionStrategy, string> = {
   react: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
   plan_and_execute: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
   conversational: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+  codeact: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400',
 };
 
 // Icon mapping for agent types
