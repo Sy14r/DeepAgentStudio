@@ -31,9 +31,11 @@ import traceback
 from sqlalchemy.orm import Session as DBSession
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+from langchain.callbacks.base import BaseCallbackHandler
 
 from .workspace import WorkspaceService, get_workspace_service
 from .web_tools import web_search, web_fetch
+from ..models.session import SpanType, SpanStatus
 
 logger = logging.getLogger(__name__)
 
@@ -397,7 +399,8 @@ class CodeActExecutor:
         max_iterations: int = 15,
         execution_timeout: float = 30.0,
         on_llm_response: Optional[Callable[[str], None]] = None,
-        on_code_execution: Optional[Callable[[str, CodeExecutionResult], None]] = None
+        on_code_execution: Optional[Callable[[str, CodeExecutionResult], None]] = None,
+        tracing_callback: Optional[BaseCallbackHandler] = None
     ):
         """
         Initialize the CodeAct executor.
@@ -409,6 +412,7 @@ class CodeActExecutor:
             execution_timeout: Timeout per code block execution (seconds)
             on_llm_response: Optional callback when LLM responds
             on_code_execution: Optional callback when code is executed
+            tracing_callback: Optional tracing callback for hierarchical span recording
         """
         self.llm = llm
         self.tool_namespace = tool_namespace
@@ -416,6 +420,10 @@ class CodeActExecutor:
         self.execution_timeout = execution_timeout
         self.on_llm_response = on_llm_response
         self.on_code_execution = on_code_execution
+        self.tracing_callback = tracing_callback
+
+        # Get span recorder from tracing callback if available
+        self._span_recorder = getattr(tracing_callback, 'recorder', None) if tracing_callback else None
 
         self._tokens_input = 0
         self._tokens_output = 0
@@ -449,96 +457,179 @@ class CodeActExecutor:
 
         steps: List[CodeActStep] = []
 
-        for iteration in range(self.max_iterations):
-            logger.info(f"CodeAct iteration {iteration + 1}/{self.max_iterations}")
-
-            # Get LLM response
+        # Create root span for the entire CodeAct execution
+        root_span = None
+        if self._span_recorder:
             try:
-                response = self.llm.invoke(messages)
-                response_text = response.content if hasattr(response, 'content') else str(response)
-
-                # Track token usage
-                if hasattr(response, 'response_metadata'):
-                    usage = response.response_metadata.get('usage', {})
-                    self._tokens_input += usage.get('prompt_tokens', 0)
-                    self._tokens_output += usage.get('completion_tokens', 0)
-
+                root_span = self._span_recorder.start_span(
+                    span_type=SpanType.CHAIN,
+                    name="CodeAct Execution",
+                    depth=0,
+                    input_data={"message": input_message[:500], "max_iterations": self.max_iterations}
+                )
+                logger.debug(f"Started CodeAct root span: {root_span.id}")
             except Exception as e:
-                logger.exception(f"LLM call failed in CodeAct: {e}")
-                return CodeActResult(
-                    success=False,
-                    output="",
-                    steps=[s._asdict() if hasattr(s, '_asdict') else vars(s) for s in steps],
+                logger.warning(f"Failed to start root span: {e}")
+
+        # Prepare callbacks for LLM invocation
+        llm_callbacks = [self.tracing_callback] if self.tracing_callback else None
+
+        try:
+            for iteration in range(self.max_iterations):
+                logger.info(f"CodeAct iteration {iteration + 1}/{self.max_iterations}")
+
+                # Get LLM response (with tracing callback for automatic LLM span recording)
+                try:
+                    response = self.llm.invoke(messages, config={"callbacks": llm_callbacks} if llm_callbacks else None)
+                    response_text = response.content if hasattr(response, 'content') else str(response)
+
+                    # Track token usage
+                    if hasattr(response, 'response_metadata'):
+                        usage = response.response_metadata.get('usage', {})
+                        self._tokens_input += usage.get('prompt_tokens', 0)
+                        self._tokens_output += usage.get('completion_tokens', 0)
+
+                except Exception as e:
+                    logger.exception(f"LLM call failed in CodeAct: {e}")
+                    self._end_root_span(root_span, SpanStatus.ERROR, error_message=str(e), error_type=type(e).__name__)
+                    return CodeActResult(
+                        success=False,
+                        output="",
+                        steps=[s._asdict() if hasattr(s, '_asdict') else vars(s) for s in steps],
+                        tokens_input=self._tokens_input,
+                        tokens_output=self._tokens_output,
+                        error_message=str(e),
+                        error_type=type(e).__name__
+                    )
+
+                # Callback for streaming/logging
+                if self.on_llm_response:
+                    self.on_llm_response(response_text)
+
+                # Log the response for debugging
+                logger.debug(f"CodeAct LLM response (first 500 chars): {response_text[:500]}")
+
+                # Extract code blocks from response
+                code_blocks = self._extract_code_blocks(response_text)
+                logger.info(f"CodeAct found {len(code_blocks)} code blocks")
+
+                # If no code blocks, this is the final answer
+                if not code_blocks:
+                    # Log when no code blocks found to help debug
+                    if '```' in response_text:
+                        logger.warning(f"CodeAct: Response contains ``` but no code blocks extracted. Response: {response_text[:300]}")
+                    steps.append(CodeActStep(
+                        step_type="llm_response",
+                        content=response_text
+                    ))
+                    self._end_root_span(root_span, SpanStatus.SUCCESS, output={"response": response_text[:500]})
+                    return CodeActResult(
+                        success=True,
+                        output=response_text,
+                        steps=self._steps_to_dicts(steps),
+                        tokens_input=self._tokens_input,
+                        tokens_output=self._tokens_output
+                    )
+
+                # Add LLM response to messages
+                messages.append(AIMessage(content=response_text))
+
+                # Execute each code block and collect observations
+                observations = []
+                for code_idx, code in enumerate(code_blocks):
+                    # Create TOOL span for code execution
+                    code_span = None
+                    if self._span_recorder and root_span:
+                        try:
+                            code_span = self._span_recorder.start_span(
+                                span_type=SpanType.TOOL,
+                                name=f"Code Execution #{iteration + 1}.{code_idx + 1}",
+                                parent_span_id=root_span.id,
+                                depth=1,
+                                tool_name="python_exec",
+                                input_data={"code": code[:1000]}
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to start code execution span: {e}")
+
+                    exec_result = self._execute_code(code)
+                    logger.info(f"CodeAct code exec result: success={exec_result.success}, stdout_len={len(exec_result.stdout)}, error={exec_result.error_message[:100] if exec_result.error_message else 'none'}")
+
+                    # End code execution span
+                    if code_span:
+                        try:
+                            self._span_recorder.end_span(
+                                code_span,
+                                status=SpanStatus.SUCCESS if exec_result.success else SpanStatus.ERROR,
+                                output={
+                                    "stdout": exec_result.stdout[:500] if exec_result.stdout else "",
+                                    "stderr": exec_result.stderr[:200] if exec_result.stderr else "",
+                                    "success": exec_result.success
+                                },
+                                error_message=exec_result.error_message if not exec_result.success else None,
+                                error_type=exec_result.error_type if not exec_result.success else None
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to end code execution span: {e}")
+
+                    steps.append(CodeActStep(
+                        step_type="code_execution",
+                        content=response_text,
+                        code=code,
+                        execution_result=exec_result
+                    ))
+
+                    # Callback for streaming
+                    if self.on_code_execution:
+                        self.on_code_execution(code, exec_result)
+
+                    # Format observation
+                    observation = self._format_observation(exec_result)
+                    observations.append(observation)
+
+                # Combine observations and add as user message (observation)
+                combined_observation = "\n\n".join(observations)
+                messages.append(HumanMessage(content=f"[Observation]\n{combined_observation}"))
+
+            # Max iterations reached
+            logger.warning(f"CodeAct reached max iterations ({self.max_iterations})")
+            self._end_root_span(root_span, SpanStatus.SUCCESS, output={"reason": "max_iterations_reached"})
+            return CodeActResult(
+                success=True,
+                output=f"Reached maximum iterations ({self.max_iterations}). Last response may be incomplete.",
+                steps=self._steps_to_dicts(steps),
+                tokens_input=self._tokens_input,
+                tokens_output=self._tokens_output
+            )
+        except Exception as e:
+            # Catch any unexpected exceptions and ensure root span is ended
+            logger.exception(f"Unexpected error in CodeAct execution: {e}")
+            self._end_root_span(root_span, SpanStatus.ERROR, error_message=str(e), error_type=type(e).__name__)
+            raise
+
+    def _end_root_span(
+        self,
+        span,
+        status: SpanStatus,
+        output: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None,
+        error_type: Optional[str] = None
+    ) -> None:
+        """Helper to end the root span with proper error handling."""
+        if span and self._span_recorder:
+            try:
+                self._span_recorder.end_span(
+                    span,
+                    status=status,
+                    output=output,
                     tokens_input=self._tokens_input,
                     tokens_output=self._tokens_output,
-                    error_message=str(e),
-                    error_type=type(e).__name__
+                    error_message=error_message,
+                    error_type=error_type
                 )
-
-            # Callback for streaming/logging
-            if self.on_llm_response:
-                self.on_llm_response(response_text)
-
-            # Log the response for debugging
-            logger.debug(f"CodeAct LLM response (first 500 chars): {response_text[:500]}")
-
-            # Extract code blocks from response
-            code_blocks = self._extract_code_blocks(response_text)
-            logger.info(f"CodeAct found {len(code_blocks)} code blocks")
-
-            # If no code blocks, this is the final answer
-            if not code_blocks:
-                # Log when no code blocks found to help debug
-                if '```' in response_text:
-                    logger.warning(f"CodeAct: Response contains ``` but no code blocks extracted. Response: {response_text[:300]}")
-                steps.append(CodeActStep(
-                    step_type="llm_response",
-                    content=response_text
-                ))
-                return CodeActResult(
-                    success=True,
-                    output=response_text,
-                    steps=self._steps_to_dicts(steps),
-                    tokens_input=self._tokens_input,
-                    tokens_output=self._tokens_output
-                )
-
-            # Add LLM response to messages
-            messages.append(AIMessage(content=response_text))
-
-            # Execute each code block and collect observations
-            observations = []
-            for code in code_blocks:
-                exec_result = self._execute_code(code)
-
-                steps.append(CodeActStep(
-                    step_type="code_execution",
-                    content=response_text,
-                    code=code,
-                    execution_result=exec_result
-                ))
-
-                # Callback for streaming
-                if self.on_code_execution:
-                    self.on_code_execution(code, exec_result)
-
-                # Format observation
-                observation = self._format_observation(exec_result)
-                observations.append(observation)
-
-            # Combine observations and add as user message (observation)
-            combined_observation = "\n\n".join(observations)
-            messages.append(HumanMessage(content=f"[Observation]\n{combined_observation}"))
-
-        # Max iterations reached
-        logger.warning(f"CodeAct reached max iterations ({self.max_iterations})")
-        return CodeActResult(
-            success=True,
-            output=f"Reached maximum iterations ({self.max_iterations}). Last response may be incomplete.",
-            steps=self._steps_to_dicts(steps),
-            tokens_input=self._tokens_input,
-            tokens_output=self._tokens_output
-        )
+                logger.debug(f"Ended CodeAct root span: {span.id} with status {status.value}")
+            except Exception as e:
+                logger.warning(f"Failed to end root span: {e}")
 
     def _extract_code_blocks(self, text: str) -> List[str]:
         """Extract Python code blocks from markdown text."""
@@ -667,7 +758,8 @@ def create_codeact_executor(
     additional_tools: Optional[List] = None,
     max_iterations: int = 15,
     on_llm_response: Optional[Callable[[str], None]] = None,
-    on_code_execution: Optional[Callable[[str, CodeExecutionResult], None]] = None
+    on_code_execution: Optional[Callable[[str, CodeExecutionResult], None]] = None,
+    tracing_callback: Optional[BaseCallbackHandler] = None
 ) -> CodeActExecutor:
     """
     Factory function to create a CodeAct executor.
@@ -680,6 +772,7 @@ def create_codeact_executor(
         max_iterations: Maximum iterations (default 15)
         on_llm_response: Optional callback for LLM responses
         on_code_execution: Optional callback for code execution
+        tracing_callback: Optional tracing callback for hierarchical span recording
 
     Returns:
         Configured CodeActExecutor instance
@@ -695,5 +788,6 @@ def create_codeact_executor(
         tool_namespace=tool_namespace,
         max_iterations=max_iterations,
         on_llm_response=on_llm_response,
-        on_code_execution=on_code_execution
+        on_code_execution=on_code_execution,
+        tracing_callback=tracing_callback
     )

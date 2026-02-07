@@ -84,7 +84,7 @@ const AGENT_SCHEMA = {
           properties: {
             provider: {
               type: 'string',
-              enum: ['openai', 'anthropic', 'google', 'azure_openai', 'ollama', 'llamacpp'],
+              enum: ['openai', 'anthropic', 'google', 'azure_openai', 'ollama', 'llamacpp', 'openai_compatible'],
               description: 'LLM provider type',
             },
             provider_id: {

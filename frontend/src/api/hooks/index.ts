@@ -36,6 +36,7 @@ export {
   useUpdateLLMProviderAPIKey,
   useDeleteLLMProvider,
   useTestLLMProvider,
+  useDiscoverModels,
 } from './useLLMProviders';
 export {
   useMCPServers,

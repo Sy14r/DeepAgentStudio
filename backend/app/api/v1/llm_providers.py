@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List
 import time
+import httpx
 from datetime import datetime
 
 from ...database import get_db
@@ -23,6 +24,8 @@ from ...schemas.llm_provider import (
     LLMProviderConfigListResponse,
     LLMProviderTestRequest,
     LLMProviderTestResponse,
+    DiscoverModelsRequest,
+    DiscoverModelsResponse,
 )
 from ...encryption import encrypt_api_key, decrypt_api_key
 from ...llm.openai_client import create_openai_client
@@ -31,6 +34,56 @@ from ...llm.base import LLMMessage, LLMAuthenticationError, LLMProviderError
 from ..deps import get_current_user
 
 router = APIRouter()
+
+
+@router.post("/discover-models", response_model=DiscoverModelsResponse)
+async def discover_models(
+    request: DiscoverModelsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Discover available models from an OpenAI-compatible server.
+
+    Calls GET {base_url}/models to list available models.
+    Works before a provider is saved (during initial setup).
+    """
+    try:
+        base_url = request.base_url.rstrip("/")
+
+        headers = {}
+        if request.api_key:
+            headers["Authorization"] = f"Bearer {request.api_key}"
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{base_url}/models", headers=headers)
+            response.raise_for_status()
+
+        data = response.json()
+        # OpenAI-compatible format: {"data": [{"id": "model-name", ...}, ...]}
+        models = []
+        if isinstance(data, dict) and "data" in data:
+            models = [m["id"] for m in data["data"] if isinstance(m, dict) and "id" in m]
+        elif isinstance(data, list):
+            models = [m["id"] for m in data if isinstance(m, dict) and "id" in m]
+
+        models.sort()
+        return DiscoverModelsResponse(success=True, models=models)
+
+    except httpx.TimeoutException:
+        return DiscoverModelsResponse(
+            success=False,
+            error="Connection timed out. Is the server running?"
+        )
+    except httpx.HTTPStatusError as e:
+        return DiscoverModelsResponse(
+            success=False,
+            error=f"Server returned {e.response.status_code}: {e.response.text[:200]}"
+        )
+    except Exception as e:
+        return DiscoverModelsResponse(
+            success=False,
+            error=f"Failed to connect: {str(e)}"
+        )
 
 
 def _provider_to_response(provider: LLMProviderConfig) -> LLMProviderConfigResponse:
@@ -60,9 +113,24 @@ def create_provider_config(
     Create a new LLM provider configuration.
 
     The API key will be encrypted before storage and never returned in responses.
+    For local/custom OpenAI-compatible endpoints, API key is optional when base_url is set.
     """
+    # Determine the API key to use
+    api_key = provider_data.api_key
+    if not api_key or not api_key.strip():
+        # Allow missing API key for openai_compatible or when a custom base_url is configured
+        has_base_url = bool(provider_data.config and provider_data.config.get("base_url"))
+        is_openai_compatible = provider_data.provider_type.value == "openai_compatible"
+        if has_base_url or is_openai_compatible:
+            api_key = "not-required"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="API key is required when no custom base_url is configured"
+            )
+
     # Encrypt the API key
-    encrypted_key = encrypt_api_key(provider_data.api_key)
+    encrypted_key = encrypt_api_key(api_key)
 
     # Create provider config
     provider = LLMProviderConfig(
@@ -279,7 +347,7 @@ async def test_provider_connection(
     start_time = time.time()
 
     try:
-        if provider.provider_type == "openai":
+        if provider.provider_type in ("openai", "openai_compatible"):
             client = create_openai_client(api_key, provider.config)
         elif provider.provider_type == "anthropic":
             client = create_anthropic_client(api_key, provider.config)

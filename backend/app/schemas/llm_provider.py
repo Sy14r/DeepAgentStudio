@@ -19,6 +19,7 @@ class LLMProviderType(str, Enum):
     AZURE_OPENAI = "azure_openai"
     OLLAMA = "ollama"
     LLAMACPP = "llamacpp"
+    OPENAI_COMPATIBLE = "openai_compatible"
 
 
 # ============================================================================
@@ -39,7 +40,7 @@ class LLMProviderConfigCreate(LLMProviderConfigBase):
 
     The API key is provided in plaintext and will be encrypted before storage.
     """
-    api_key: str = Field(..., description="API key (will be encrypted)")
+    api_key: Optional[str] = Field(None, description="API key (will be encrypted). Optional for local/custom endpoints.")
 
 
 class LLMProviderConfigUpdate(BaseModel):
@@ -96,6 +97,7 @@ class LLMProviderConfigListResponse(BaseModel):
 
 class OpenAIConfig(BaseModel):
     """OpenAI-specific configuration"""
+    base_url: Optional[str] = Field(None, description="Custom API base URL for OpenAI-compatible endpoints (e.g. vLLM, LM Studio)")
     organization_id: Optional[str] = Field(None, description="OpenAI organization ID")
     default_model: str = Field(default="gpt-4", description="Default model to use")
     max_tokens: Optional[int] = Field(None, ge=1, le=128000, description="Max tokens")
@@ -132,6 +134,14 @@ class OllamaConfig(BaseModel):
     default_model: str = Field(default="llama2", description="Default model to use")
 
 
+class OpenAICompatibleConfig(BaseModel):
+    """Configuration for OpenAI API-compatible servers (vLLM, LM Studio, llama.cpp, etc.)"""
+    base_url: str = Field(..., description="Base URL of the OpenAI-compatible server (required)")
+    default_model: Optional[str] = Field(None, description="Default model to use")
+    max_tokens: Optional[int] = Field(None, ge=1, le=128000, description="Max tokens")
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature")
+
+
 # ============================================================================
 # Test/Validation Schemas
 # ============================================================================
@@ -151,3 +161,20 @@ class LLMProviderTestResponse(BaseModel):
     error: Optional[str] = Field(None, description="Error message if test failed")
     latency_ms: Optional[int] = Field(None, description="Response latency in milliseconds")
     tokens_used: Optional[int] = Field(None, description="Tokens used in the test")
+
+
+# ============================================================================
+# Model Discovery Schemas
+# ============================================================================
+
+class DiscoverModelsRequest(BaseModel):
+    """Schema for discovering models from an OpenAI-compatible server"""
+    base_url: str = Field(..., description="Base URL of the server")
+    api_key: Optional[str] = Field(None, description="Optional API key")
+
+
+class DiscoverModelsResponse(BaseModel):
+    """Schema for model discovery response"""
+    success: bool = Field(..., description="Whether discovery succeeded")
+    models: list[str] = Field(default_factory=list, description="List of model IDs")
+    error: Optional[str] = Field(None, description="Error message if failed")

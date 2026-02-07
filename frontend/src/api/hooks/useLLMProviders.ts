@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/api/client';
-import { LLMProvider, LLMProviderCreateRequest } from '@/api/types';
+import { LLMProvider, LLMProviderCreateRequest, DiscoverModelsRequest, DiscoverModelsResponse } from '@/api/types';
 
 interface LLMProviderListResponse {
   providers: LLMProvider[];
@@ -104,6 +104,15 @@ export function useTestLLMProvider(id: number) {
   return useMutation({
     mutationFn: async (): Promise<{ success: boolean; message: string }> => {
       const response = await apiClient.post<{ success: boolean; message: string }>(`/llm-providers/${id}/test`);
+      return response.data;
+    },
+  });
+}
+
+export function useDiscoverModels() {
+  return useMutation({
+    mutationFn: async (data: DiscoverModelsRequest): Promise<DiscoverModelsResponse> => {
+      const response = await apiClient.post<DiscoverModelsResponse>('/llm-providers/discover-models', data);
       return response.data;
     },
   });

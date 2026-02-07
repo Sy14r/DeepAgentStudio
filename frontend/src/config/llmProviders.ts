@@ -97,6 +97,7 @@ export const LLM_PROVIDER_CONFIG: Record<string, ProviderConfig> = {
     notes: [
       'Newer models (gpt-4o, gpt-4-turbo, o1, o3) use max_completion_tokens instead of max_tokens',
       'The backend handles this conversion automatically',
+      'Supports custom OpenAI-compatible endpoints (vLLM, LM Studio, text-generation-webui, Ollama via OpenAI compat) — set a custom Base URL and API key becomes optional',
     ],
   },
 
@@ -339,6 +340,40 @@ export const LLM_PROVIDER_CONFIG: Record<string, ProviderConfig> = {
     notes: [
       'LlamaCpp runs GGUF models locally',
       'LlamaCpp support coming soon',
+    ],
+  },
+
+  openai_compatible: {
+    name: 'OpenAI-Compatible',
+    models: [],
+    parameters: {
+      temperature: {
+        min: 0,
+        max: 2,
+        default: 0.7,
+        step: 0.1,
+        description: 'Controls randomness. Lower = more focused, higher = more creative.',
+      },
+      max_tokens: {
+        min: 1,
+        max: 32768,
+        default: 4096,
+        step: 1,
+        description: 'Maximum tokens to generate in the response.',
+      },
+      top_p: {
+        min: 0,
+        max: 1,
+        default: 1,
+        step: 0.05,
+        optional: true,
+        description: 'Nucleus sampling threshold.',
+      },
+    },
+    notes: [
+      'Connect to any OpenAI API-compatible server',
+      'Supports vLLM, LM Studio, llama.cpp, Ollama, Together AI, Groq, OpenRouter, and more',
+      'Use "Fetch Models" to auto-discover available models from your server',
     ],
   },
 };

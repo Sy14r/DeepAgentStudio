@@ -1304,13 +1304,14 @@ class AgentExecutorService:
         if session_id is None:
             raise AgentConfigurationError("CodeAct requires a valid session ID")
 
-        # Create CodeAct executor with tool namespace
+        # Create CodeAct executor with tool namespace and tracing
         codeact_executor = create_codeact_executor(
             db=self.db,
             session_id=session_id,
             llm=llm,
             additional_tools=tools,
-            max_iterations=config.get("max_iterations", 15)
+            max_iterations=config.get("max_iterations", 15),
+            tracing_callback=tracing_callback
         )
 
         # Record that we're using CodeAct

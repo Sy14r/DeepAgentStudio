@@ -54,6 +54,7 @@ const PROVIDER_LABELS: Record<LLMProviderType, string> = {
   azure_openai: 'Azure OpenAI',
   ollama: 'Ollama',
   llamacpp: 'LlamaCpp',
+  openai_compatible: 'OpenAI-Compatible',
 };
 
 const PROVIDER_COLORS: Record<LLMProviderType, string> = {
@@ -63,6 +64,7 @@ const PROVIDER_COLORS: Record<LLMProviderType, string> = {
   azure_openai: 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-400',
   ollama: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
   llamacpp: 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-400',
+  openai_compatible: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400',
 };
 
 interface ProviderRowProps {

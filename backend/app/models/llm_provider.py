@@ -19,6 +19,7 @@ class LLMProviderType(str, Enum):
     AZURE_OPENAI = "azure_openai"
     OLLAMA = "ollama"
     LLAMACPP = "llamacpp"
+    OPENAI_COMPATIBLE = "openai_compatible"
 
 
 class LLMProviderConfig(Base):

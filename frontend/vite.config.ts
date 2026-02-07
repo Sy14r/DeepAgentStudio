@@ -14,6 +14,11 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: ['agents-dev.trmnl.life'],
     port: 5173,
+    hmr: {
+      protocol: 'wss',
+      host: 'agents-dev.trmnl.life',
+      clientPort: 443,
+    },
     proxy: {
       '/api': {
         target: 'http://backend:8000',

@@ -381,7 +381,7 @@ export interface SessionDetail extends Session {
 }
 
 // LLM Provider types
-export type LLMProviderType = 'openai' | 'anthropic' | 'google' | 'azure_openai' | 'ollama' | 'llamacpp';
+export type LLMProviderType = 'openai' | 'anthropic' | 'google' | 'azure_openai' | 'ollama' | 'llamacpp' | 'openai_compatible';
 
 export interface LLMProvider {
   id: number;
@@ -398,7 +398,7 @@ export interface LLMProvider {
 export interface LLMProviderCreateRequest {
   name: string;
   provider_type: LLMProviderType;
-  api_key: string;
+  api_key?: string;
   config?: Record<string, unknown>;
 }
 
@@ -429,6 +429,18 @@ export interface LLMProviderConfig {
   base_url?: string;
   custom_models?: CustomModelConfig[];
   [key: string]: unknown;        // Allow other provider-specific config
+}
+
+// Model Discovery types (for OpenAI-compatible servers)
+export interface DiscoverModelsRequest {
+  base_url: string;
+  api_key?: string;
+}
+
+export interface DiscoverModelsResponse {
+  success: boolean;
+  models: string[];
+  error?: string;
 }
 
 // Pagination

@@ -373,7 +373,7 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 # CodeAct agent - code-as-action paradigm
                 return self._run_codeact_agent(
                     llm, tools, input_message, system_prompt, config, chat_history,
-                    streaming_callback, recorder
+                    streaming_callback, recorder, tracing_callback
                 )
 
             elif execution_strategy == ExecutionStrategy.conversational:
@@ -664,7 +664,8 @@ class StreamingAgentExecutorService(AgentExecutorService):
         config: Dict[str, Any],
         chat_history: List,
         streaming_callback,
-        recorder
+        recorder,
+        tracing_callback=None
     ) -> Dict[str, Any]:
         """
         Run CodeAct agent (code-as-action paradigm).
@@ -703,14 +704,15 @@ class StreamingAgentExecutorService(AgentExecutorService):
                 except Exception as e:
                     logger.warning(f"Failed to send code_result event: {e}")
 
-        # Create CodeAct executor
+        # Create CodeAct executor with tracing support
         codeact_executor = create_codeact_executor(
             db=self.db,
             session_id=session_id,
             llm=llm,
             additional_tools=tools,
             max_iterations=config.get("max_iterations", 15),
-            on_code_execution=on_code_execution
+            on_code_execution=on_code_execution,
+            tracing_callback=tracing_callback
         )
 
         # Execute CodeAct loop

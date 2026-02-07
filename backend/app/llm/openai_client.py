@@ -30,8 +30,6 @@ class OpenAIClient(BaseLLMClient):
     - Organization-specific API keys
     """
 
-    BASE_URL = "https://api.openai.com/v1"
-
     def __init__(self, api_key: str, config: Dict[str, Any] = None):
         """
         Initialize OpenAI client.
@@ -39,11 +37,13 @@ class OpenAIClient(BaseLLMClient):
         Args:
             api_key: OpenAI API key
             config: Optional config with:
+                - base_url: Custom API base URL (default: "https://api.openai.com/v1")
                 - organization_id: OpenAI organization ID
                 - default_model: Default model (default: "gpt-4o-mini")
                 - timeout: Request timeout in seconds (default: 60)
         """
         super().__init__(api_key, config)
+        self.base_url = self.config.get("base_url", "https://api.openai.com/v1")
         self.organization_id = self.config.get("organization_id")
         self.default_model = self.config.get("default_model", "gpt-4o-mini")
         self.timeout = self.config.get("timeout", 60)
@@ -116,7 +116,7 @@ class OpenAIClient(BaseLLMClient):
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
-                    f"{self.BASE_URL}/chat/completions",
+                    f"{self.base_url}/chat/completions",
                     headers=self._get_headers(),
                     json=payload
                 )

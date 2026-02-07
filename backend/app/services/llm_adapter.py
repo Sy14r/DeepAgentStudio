@@ -206,6 +206,9 @@ class LLMProviderAdapter:
                 "LlamaCPP support coming soon"
             )
 
+        elif provider_type == LLMProviderType.OPENAI_COMPATIBLE:
+            return LLMProviderAdapter._create_openai_compatible(api_key, merged_config)
+
         else:
             raise UnsupportedProviderError(
                 f"Unsupported provider type: {provider_type}"
@@ -274,6 +277,7 @@ class LLMProviderAdapter:
         temperature = config.get("temperature", 0.7)
         max_tokens = config.get("max_tokens")
         organization_id = config.get("organization_id")
+        base_url = config.get("base_url")
         timeout = config.get("timeout", 60)
 
         kwargs = {
@@ -283,6 +287,9 @@ class LLMProviderAdapter:
             "timeout": timeout,
             "stream_usage": True,  # Enable token usage reporting for streaming
         }
+
+        if base_url:
+            kwargs["base_url"] = base_url
 
         # Handle max_tokens vs max_completion_tokens based on model
         # Pass full config to check custom_models for usesMaxCompletionTokens flag
@@ -366,6 +373,51 @@ class LLMProviderAdapter:
         return ChatAnthropic(**kwargs)
 
     @staticmethod
+    def _create_openai_compatible(api_key: str, config: Dict[str, Any]) -> ChatOpenAI:
+        """
+        Create LLM for OpenAI API-compatible servers.
+
+        Unlike _create_openai, this method:
+        - Always uses max_tokens (no max_completion_tokens conversion)
+        - Does not use the ChatOpenAINoStop wrapper
+        - Requires base_url in config
+
+        Args:
+            api_key: API key (may be "not-required" for local servers)
+            config: Configuration dict with base_url, model, temperature, etc.
+
+        Returns:
+            ChatOpenAI instance configured for the compatible server
+        """
+        base_url = config.get("base_url")
+        if not base_url:
+            raise LLMAdapterError("base_url is required for openai_compatible provider")
+
+        model = config.get("model") or config.get("default_model", "")
+        if not model:
+            raise LLMAdapterError("model is required for openai_compatible provider")
+
+        temperature = config.get("temperature", 0.7)
+        max_tokens = config.get("max_tokens")
+        timeout = config.get("timeout", 60)
+
+        kwargs: Dict[str, Any] = {
+            "api_key": api_key if api_key != "not-required" else "not-needed",
+            "base_url": base_url,
+            "model": model,
+            "temperature": temperature,
+            "timeout": timeout,
+            "stream_usage": True,
+        }
+
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
+        logger.debug(f"Creating OpenAI-compatible LLM: base_url={base_url}, model={model}, temp={temperature}")
+
+        return ChatOpenAI(**kwargs)
+
+    @staticmethod
     def get_supported_providers() -> list[str]:
         """
         Get list of currently supported provider types.
@@ -373,7 +425,7 @@ class LLMProviderAdapter:
         Returns:
             List of supported provider type strings
         """
-        return ["openai", "anthropic"]
+        return ["openai", "anthropic", "openai_compatible"]
 
     @staticmethod
     def is_provider_supported(provider_type: str) -> bool:
